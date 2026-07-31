@@ -392,7 +392,6 @@ async def description_input(update: Update, context: ContextTypes.DEFAULT_TYPE):
         return DESCRIPTION
     context.user_data['description'] = text
     
-    # مرحله عکس - اینجا مهمه که درست کار کنه
     await update.message.reply_text(
         "📸 حالا عکس پروفایل خودت رو بفرست.\n\n"
         "این عکس وقتی کسی درخواست عکس بده، براش ارسال میشه.\n"
@@ -409,7 +408,7 @@ async def description_skip(update: Update, context: ContextTypes.DEFAULT_TYPE):
     await query.answer()
     context.user_data['description'] = ""
     
-    await update.callback_query.edit_message_text(
+    await query.edit_message_text(
         "📸 حالا عکس پروفایل خودت رو بفرست.\n\n"
         "این عکس وقتی کسی درخواست عکس بده، براش ارسال میشه.\n"
         "اگه عکس نفرستی، عکس پروفایل تلگرامت استفاده میشه.\n\n"
@@ -435,7 +434,7 @@ async def handle_photo_upload(update: Update, context: ContextTypes.DEFAULT_TYPE
                 [InlineKeyboardButton("✅ ادامه", callback_data="photo_done")]
             ])
         )
-        return PRIVACY
+        return PHOTO  # <--- مهم: به PHOTO برگرد تا کاربر دکمه ادامه رو بزنه
     else:
         await update.message.reply_text(
             "❌ لطفاً یک عکس بفرست!",
@@ -451,7 +450,7 @@ async def skip_photo(update: Update, context: ContextTypes.DEFAULT_TYPE):
     context.user_data['photo'] = None
     
     await show_privacy_settings(update, context)
-    return PRIVACY
+    return PRIVACY  # <--- به مرحله حریم خصوصی برو
 
 async def photo_done(update: Update, context: ContextTypes.DEFAULT_TYPE):
     query = update.callback_query
@@ -459,7 +458,7 @@ async def photo_done(update: Update, context: ContextTypes.DEFAULT_TYPE):
     
     # عکس قبلاً تو handle_photo_upload ذخیره شده
     await show_privacy_settings(update, context)
-    return PRIVACY
+    return PRIVACY  # <--- به مرحله حریم خصوصی برو
 
 # ==================== حریم خصوصی ====================
 
@@ -531,7 +530,6 @@ async def privacy_selection(update: Update, context: ContextTypes.DEFAULT_TYPE):
 async def finish_registration(update: Update, context: ContextTypes.DEFAULT_TYPE):
     user_id = update.effective_user.id
     
-    # اگر عکس در context نباشه، از تلگرام میگیریم
     if 'photo' not in context.user_data or not context.user_data['photo']:
         try:
             user_photos = await context.bot.get_user_profile_photos(user_id, limit=1)
@@ -1507,8 +1505,6 @@ def main():
     init_db()
     
     application = Application.builder().token(TOKEN).build()
-    
-    # ============ همه هندلرها ============
     
     conv_handler = ConversationHandler(
         entry_points=[CommandHandler('start', start)],
