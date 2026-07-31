@@ -1573,19 +1573,10 @@ def main():
     # حریم خصوصی
     application.add_handler(CallbackQueryHandler(privacy_toggle, pattern='^privacy_toggle_(age|city|change_visibility)$'))
     
-    # ============ اجرا با Webhook ============
+    # ============ اجرا با Polling ============
     
-    port = int(os.environ.get('PORT', 10000))
-    webhook_url = f"https://{os.environ.get('RENDER_EXTERNAL_HOSTNAME')}/webhook"
-    
-    logger.info(f"Starting webhook on port {port} with URL: {webhook_url}")
-    
-    application.run_webhook(
-        listen="0.0.0.0",
-        port=port,
-        url_path=TOKEN,
-        webhook_url=webhook_url
-    )
+    logger.info("Bot started with Polling!")
+    application.run_polling(allowed_updates=Update.ALL_TYPES)
 
 if __name__ == '__main__':
     main()
