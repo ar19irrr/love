@@ -1084,26 +1084,54 @@ async def handle_chat_message(update: Update, context: ContextTypes.DEFAULT_TYPE
     conn.commit()
     conn.close()
     
+    # ========== اینجا رو درست کردم ==========
     try:
+        # فرستادن پیام به طرف مقابل
         if message_type == "text":
-            await context.bot.send_message(partner_id, f"📩 پیام جدید:\n\n{message_text}")
+            await context.bot.send_message(
+                chat_id=partner_id,
+                text=f"📩 پیام جدید:\n\n{message_text}"
+            )
         elif message_type == "photo":
-            await context.bot.send_photo(partner_id, file_id, caption="📸 عکس جدید")
+            await context.bot.send_photo(
+                chat_id=partner_id,
+                photo=file_id,
+                caption="📸 عکس جدید"
+            )
         elif message_type == "sticker":
-            await context.bot.send_sticker(partner_id, file_id)
+            await context.bot.send_sticker(
+                chat_id=partner_id,
+                sticker=file_id
+            )
         elif message_type == "gif":
-            await context.bot.send_animation(partner_id, file_id, caption="🎬 گیف جدید")
+            await context.bot.send_animation(
+                chat_id=partner_id,
+                animation=file_id,
+                caption="🎬 گیف جدید"
+            )
         elif message_type == "video":
-            await context.bot.send_video(partner_id, file_id, caption="🎥 ویدیو جدید")
+            await context.bot.send_video(
+                chat_id=partner_id,
+                video=file_id,
+                caption="🎥 ویدیو جدید"
+            )
         elif message_type == "voice":
-            await context.bot.send_voice(partner_id, file_id)
+            await context.bot.send_voice(
+                chat_id=partner_id,
+                voice=file_id
+            )
         elif message_type == "audio":
-            await context.bot.send_audio(partner_id, file_id)
+            await context.bot.send_audio(
+                chat_id=partner_id,
+                audio=file_id
+            )
         
+        # تاییدیه به فرستنده
         await update.message.reply_text("✅")
+        
     except Exception as e:
-        logger.error(f"Error sending message: {e}")
-        await update.message.reply_text("❌ ارسال ناموفق!")
+        logger.error(f"Error sending message to partner: {e}")
+        await update.message.reply_text("❌ ارسال ناموفق! کاربر آفلاین است.")
 
 async def request_photo(update: Update, context: ContextTypes.DEFAULT_TYPE):
     query = update.callback_query
