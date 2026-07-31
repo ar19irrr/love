@@ -6,7 +6,6 @@ from datetime import datetime, timedelta
 from telegram import Update, InlineKeyboardButton, InlineKeyboardMarkup
 from telegram.ext import Application, CommandHandler, CallbackQueryHandler, MessageHandler, filters, ContextTypes, ConversationHandler
 
-# تنظیمات اولیه
 TOKEN = os.environ.get('TOKEN', "YOUR_BOT_TOKEN_HERE")
 
 logging.basicConfig(
@@ -131,8 +130,6 @@ def save_user(user_id, data):
 # ==================== مراحل ثبت‌نام ====================
 
 GENDER, AGE, PURPOSE, CITY, AGE_MIN, AGE_MAX, INTERESTS, JOB_STATUS, DESCRIPTION, PHOTO, PRIVACY = range(11)
-
-# ==================== منوی اصلی ====================
 
 def main_menu_keyboard():
     keyboard = [
@@ -718,8 +715,8 @@ async def candidate_action(update: Update, context: ContextTypes.DEFAULT_TYPE):
                         f"می‌خواید پروفایلش رو ببینید؟",
                         reply_markup=InlineKeyboardMarkup([
                             [InlineKeyboardButton("👀 مشاهده پروفایل", callback_data=f"view_requester_{user_id}")],
-                            [InlineKeyboardButton("✅ تایید", callback_data=f"accept_request_{user_id}")],
-                            [InlineKeyboardButton("❌ رد کردن", callback_data=f"reject_request_{user_id}")]
+                            [InlineKeyboardButton("✅ تایید", callback_data=f"accept_{user_id}")],
+                            [InlineKeyboardButton("❌ رد کردن", callback_data=f"reject_{user_id}")]
                         ])
                     )
             except Exception as e:
@@ -784,7 +781,7 @@ async def view_requester(update: Update, context: ContextTypes.DEFAULT_TYPE):
     try:
         parts = query.data.split('_')
         if len(parts) != 3:
-            await query.edit_message_text("❌ خطا در پردازش! فرمت: view_requester_123", reply_markup=main_menu_keyboard())
+            await query.edit_message_text("❌ خطا در پردازش!", reply_markup=main_menu_keyboard())
             return
         requester_id = int(parts[2])
     except Exception as e:
@@ -811,8 +808,8 @@ async def view_requester(update: Update, context: ContextTypes.DEFAULT_TYPE):
         message += f"\n📝 توضیحات: {requester['description']}"
     
     keyboard = [
-        [InlineKeyboardButton("✅ تایید", callback_data=f"accept_request_{requester_id}")],
-        [InlineKeyboardButton("❌ رد کردن", callback_data=f"reject_request_{requester_id}")],
+        [InlineKeyboardButton("✅ تایید", callback_data=f"accept_{requester_id}")],
+        [InlineKeyboardButton("❌ رد کردن", callback_data=f"reject_{requester_id}")],
         [InlineKeyboardButton("🔙 برگشت", callback_data="back_to_menu")]
     ]
     
@@ -844,11 +841,11 @@ async def handle_request(update: Update, context: ContextTypes.DEFAULT_TYPE):
     
     try:
         parts = query.data.split('_')
-        if len(parts) != 3:
-            await query.edit_message_text("❌ خطا در پردازش! فرمت: accept_request_123", reply_markup=main_menu_keyboard())
+        if len(parts) != 2:
+            await query.edit_message_text("❌ خطا در پردازش! فرمت: accept_123", reply_markup=main_menu_keyboard())
             return
         action = parts[0]
-        user_id = int(parts[2])
+        user_id = int(parts[1])
     except Exception as e:
         logger.error(f"Error in handle_request: {e}")
         await query.edit_message_text("❌ خطا در پردازش!", reply_markup=main_menu_keyboard())
@@ -933,7 +930,7 @@ async def start_chat(update: Update, context: ContextTypes.DEFAULT_TYPE):
     try:
         parts = query.data.split('_')
         if len(parts) != 3:
-            await query.edit_message_text("❌ خطا در پردازش! فرمت: start_chat_123", reply_markup=main_menu_keyboard())
+            await query.edit_message_text("❌ خطا در پردازش!", reply_markup=main_menu_keyboard())
             return
         chat_id = int(parts[2])
     except Exception as e:
@@ -1616,7 +1613,7 @@ def main():
     
     # درخواست‌ها
     application.add_handler(CallbackQueryHandler(view_requester, pattern='^view_requester_'))
-    application.add_handler(CallbackQueryHandler(handle_request, pattern='^(accept|reject)_request_'))
+    application.add_handler(CallbackQueryHandler(handle_request, pattern='^(accept|reject)_'))
     
     # چت
     application.add_handler(CallbackQueryHandler(start_chat, pattern='^start_chat_'))
@@ -1628,8 +1625,6 @@ def main():
     
     # حریم خصوصی
     application.add_handler(CallbackQueryHandler(privacy_toggle, pattern='^privacy_toggle_(age|city|change_visibility)$'))
-    
-    # ============ اجرا ============
     
     logger.info("Bot started with Polling!")
     application.run_polling(allowed_updates=Update.ALL_TYPES)
