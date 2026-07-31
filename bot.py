@@ -14,8 +14,6 @@ logging.basicConfig(
 )
 logger = logging.getLogger(__name__)
 
-# ==================== دیتابیس ====================
-
 def init_db():
     conn = sqlite3.connect('matchbot.db')
     c = conn.cursor()
@@ -127,8 +125,6 @@ def save_user(user_id, data):
     conn.commit()
     conn.close()
 
-# ==================== مراحل ثبت‌نام ====================
-
 GENDER, AGE, PURPOSE, CITY, AGE_MIN, AGE_MAX, INTERESTS, JOB_STATUS, DESCRIPTION, PHOTO, PRIVACY = range(11)
 
 def main_menu_keyboard():
@@ -142,8 +138,6 @@ def main_menu_keyboard():
         [InlineKeyboardButton("ℹ️ راهنما", callback_data="help")]
     ]
     return InlineKeyboardMarkup(keyboard)
-
-# ==================== شروع و ثبت‌نام ====================
 
 async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
     user_id = update.effective_user.id
@@ -271,8 +265,6 @@ async def age_max_input(update: Update, context: ContextTypes.DEFAULT_TYPE):
     await show_interests(update, context)
     return INTERESTS
 
-# ==================== علایق ====================
-
 def get_interests_keyboard(selected=None):
     if selected is None:
         selected = []
@@ -360,8 +352,6 @@ async def interests_selection(update: Update, context: ContextTypes.DEFAULT_TYPE
     await show_interests(update, context)
     return INTERESTS
 
-# ==================== وضعیت شغلی ====================
-
 async def job_status_selection(update: Update, context: ContextTypes.DEFAULT_TYPE):
     query = update.callback_query
     await query.answer()
@@ -417,8 +407,6 @@ async def description_skip(update: Update, context: ContextTypes.DEFAULT_TYPE):
     )
     return PHOTO
 
-# ==================== عکس ====================
-
 async def handle_photo_upload(update: Update, context: ContextTypes.DEFAULT_TYPE):
     if update.message.photo:
         photo_file = update.message.photo[-1]
@@ -456,8 +444,6 @@ async def photo_done(update: Update, context: ContextTypes.DEFAULT_TYPE):
     
     await show_privacy_settings(update, context)
     return PRIVACY
-
-# ==================== حریم خصوصی ====================
 
 async def show_privacy_settings(update: Update, context: ContextTypes.DEFAULT_TYPE):
     if 'privacy' not in context.user_data:
@@ -527,13 +513,16 @@ async def privacy_selection(update: Update, context: ContextTypes.DEFAULT_TYPE):
 async def finish_registration(update: Update, context: ContextTypes.DEFAULT_TYPE):
     user_id = update.effective_user.id
     
+    # اگه عکس نفرستاده، از تلگرام بگیر
     if 'photo' not in context.user_data or not context.user_data['photo']:
         try:
             user_photos = await context.bot.get_user_profile_photos(user_id, limit=1)
             if user_photos.total_count > 0:
                 photo_file_id = user_photos.photos[0][-1].file_id
                 context.user_data['photo'] = photo_file_id
-        except:
+                logger.info(f"Got photo from Telegram profile for user {user_id}")
+        except Exception as e:
+            logger.error(f"Could not get profile photo: {e}")
             context.user_data['photo'] = None
     
     user_data = {
@@ -667,7 +656,7 @@ async def show_candidate(update: Update, context: ContextTypes.DEFAULT_TYPE):
     keyboard = [
         [InlineKeyboardButton("👍 علاقه‌مندم", callback_data=f"like_{user_dict['user_id']}")],
         [InlineKeyboardButton("👎 رد کردن", callback_data=f"dislike_{user_dict['user_id']}")],
-        [InlineKeyboardButton("❓ اطلاعات بیشتر", callback_data=f"more_info_{user_dict['user_id']}")],
+        [InlineKeyboardButton("❓ اطلاعات بیشتر", callback_data=f"more_{user_dict['user_id']}")],
         [InlineKeyboardButton("⏩ بعدی", callback_data="next_candidate")]
     ]
     
@@ -714,7 +703,7 @@ async def candidate_action(update: Update, context: ContextTypes.DEFAULT_TYPE):
                         f"📩 یه نفر به شما علاقه نشان داد!\n"
                         f"می‌خواید پروفایلش رو ببینید؟",
                         reply_markup=InlineKeyboardMarkup([
-                            [InlineKeyboardButton("👀 مشاهده پروفایل", callback_data=f"view_requester_{user_id}")],
+                            [InlineKeyboardButton("👀 مشاهده پروفایل", callback_data=f"view_{user_id}")],
                             [InlineKeyboardButton("✅ تایید", callback_data=f"accept_{user_id}")],
                             [InlineKeyboardButton("❌ رد کردن", callback_data=f"reject_{user_id}")]
                         ])
@@ -749,7 +738,7 @@ async def candidate_action(update: Update, context: ContextTypes.DEFAULT_TYPE):
             context.user_data['candidate_index'] += 1
         await show_candidate(update, context)
     
-    elif action == "more_info":
+    elif action == "more":
         target_user = get_user_dict(target_id)
         if target_user:
             interests = json.loads(target_user['interests']) if target_user['interests'] else []
@@ -763,7 +752,7 @@ async def candidate_action(update: Update, context: ContextTypes.DEFAULT_TYPE):
             await query.edit_message_text(
                 message,
                 reply_markup=InlineKeyboardMarkup([
-                    [InlineKeyboardButton("🔙 برگشت به پروفایل", callback_data=f"back_to_candidate_{target_id}")]
+                    [InlineKeyboardButton("🔙 برگشت به پروفایل", callback_data=f"back_{target_id}")]
                 ])
             )
 
@@ -772,18 +761,18 @@ async def back_to_candidate(update: Update, context: ContextTypes.DEFAULT_TYPE):
     await query.answer()
     await show_candidate(update, context)
 
-# ==================== مشاهده پروفایل و مدیریت درخواست‌ها ====================
+# ==================== مشاهده پروفایل ====================
 
 async def view_requester(update: Update, context: ContextTypes.DEFAULT_TYPE):
     query = update.callback_query
     await query.answer()
     
     try:
-        parts = query.data.split('_')
-        if len(parts) != 3:
-            await query.edit_message_text("❌ خطا در پردازش!", reply_markup=main_menu_keyboard())
+        parts = query.data.split('_', 1)
+        if len(parts) != 2:
+            await query.edit_message_text("❌ خطا در پردازش! فرمت: view_123", reply_markup=main_menu_keyboard())
             return
-        requester_id = int(parts[2])
+        requester_id = int(parts[1])
     except Exception as e:
         logger.error(f"Error in view_requester: {e}")
         await query.edit_message_text("❌ خطا در پردازش!", reply_markup=main_menu_keyboard())
@@ -835,12 +824,14 @@ async def view_requester(update: Update, context: ContextTypes.DEFAULT_TYPE):
             reply_markup=InlineKeyboardMarkup(keyboard)
         )
 
+# ==================== مدیریت درخواست‌ها ====================
+
 async def handle_request(update: Update, context: ContextTypes.DEFAULT_TYPE):
     query = update.callback_query
     await query.answer()
     
     try:
-        parts = query.data.split('_')
+        parts = query.data.split('_', 1)
         if len(parts) != 2:
             await query.edit_message_text("❌ خطا در پردازش! فرمت: accept_123", reply_markup=main_menu_keyboard())
             return
@@ -885,7 +876,7 @@ async def handle_request(update: Update, context: ContextTypes.DEFAULT_TYPE):
                 f"🎉 طرف مقابل درخواست شما رو قبول کرد!\n"
                 f"حالا می‌تونید با هم چت کنید.",
                 reply_markup=InlineKeyboardMarkup([
-                    [InlineKeyboardButton("💬 شروع چت", callback_data=f"start_chat_{chat_id}")]
+                    [InlineKeyboardButton("💬 شروع چت", callback_data=f"chat_{chat_id}")]
                 ])
             )
         except Exception as e:
@@ -895,7 +886,7 @@ async def handle_request(update: Update, context: ContextTypes.DEFAULT_TYPE):
             "🎉 هورا! شما همدیگرو پسندیدین!\n"
             "چت شما فعال شد.",
             reply_markup=InlineKeyboardMarkup([
-                [InlineKeyboardButton("💬 شروع چت", callback_data=f"start_chat_{chat_id}")]
+                [InlineKeyboardButton("💬 شروع چت", callback_data=f"chat_{chat_id}")]
             ])
         )
     
@@ -928,11 +919,11 @@ async def start_chat(update: Update, context: ContextTypes.DEFAULT_TYPE):
     await query.answer()
     
     try:
-        parts = query.data.split('_')
-        if len(parts) != 3:
-            await query.edit_message_text("❌ خطا در پردازش!", reply_markup=main_menu_keyboard())
+        parts = query.data.split('_', 1)
+        if len(parts) != 2:
+            await query.edit_message_text("❌ خطا در پردازش! فرمت: chat_123", reply_markup=main_menu_keyboard())
             return
-        chat_id = int(parts[2])
+        chat_id = int(parts[1])
     except Exception as e:
         logger.error(f"Error in start_chat: {e}")
         await query.edit_message_text("❌ خطا در پردازش!", reply_markup=main_menu_keyboard())
@@ -962,7 +953,7 @@ async def start_chat(update: Update, context: ContextTypes.DEFAULT_TYPE):
         "پیام خودت رو بفرست...\n\n"
         "📌 برای بستن چت از دکمه زیر استفاده کن.",
         reply_markup=InlineKeyboardMarkup([
-            [InlineKeyboardButton("📸 درخواست عکس", callback_data=f"request_photo_{other_user}")],
+            [InlineKeyboardButton("📸 درخواست عکس", callback_data=f"photo_{other_user}")],
             [InlineKeyboardButton("❌ بستن چت", callback_data="close_chat")],
             [InlineKeyboardButton("🚫 بلاک کردن", callback_data=f"block_{other_user}")]
         ])
@@ -996,7 +987,7 @@ async def handle_chat_message(update: Update, context: ContextTypes.DEFAULT_TYPE
             partner_id,
             f"📩 پیام جدید:\n\n{text}",
             reply_markup=InlineKeyboardMarkup([
-                [InlineKeyboardButton("💬 پاسخ", callback_data=f"reply_chat_{chat_id}")]
+                [InlineKeyboardButton("💬 پاسخ", callback_data=f"reply_{chat_id}")]
             ])
         )
         await update.message.reply_text("✅ پیام ارسال شد!")
@@ -1011,7 +1002,7 @@ async def request_photo(update: Update, context: ContextTypes.DEFAULT_TYPE):
     try:
         parts = query.data.split('_', 1)
         if len(parts) != 2:
-            await query.edit_message_text("❌ خطا در پردازش!", reply_markup=main_menu_keyboard())
+            await query.edit_message_text("❌ خطا در پردازش! فرمت: photo_123", reply_markup=main_menu_keyboard())
             return
         target_id = int(parts[1])
     except Exception as e:
@@ -1026,78 +1017,23 @@ async def request_photo(update: Update, context: ContextTypes.DEFAULT_TYPE):
         await query.edit_message_text("❌ شما در هیچ چتی نیستی!", reply_markup=main_menu_keyboard())
         return
     
-    conn = sqlite3.connect('matchbot.db')
-    c = conn.cursor()
-    c.execute("""
-        INSERT INTO photo_requests (requester_id, target_id, chat_id, created_at)
-        VALUES (?, ?, ?, ?)
-    """, (requester_id, target_id, chat_id, datetime.now()))
-    conn.commit()
-    conn.close()
+    # بررسی عکس کاربر
+    user = get_user_dict(target_id)
     
-    try:
-        user = get_user_dict(target_id)
-        if user and user['photo_file_id']:
-            await context.bot.send_message(
-                target_id,
-                f"📸 کاربری درخواست عکس شما رو کرده!\n"
-                "آیا اجازه می‌دی عکس شما رو ببینه؟",
-                reply_markup=InlineKeyboardMarkup([
-                    [InlineKeyboardButton("✅ بله", callback_data=f"accept_photo_{requester_id}")],
-                    [InlineKeyboardButton("❌ نه", callback_data=f"reject_photo_{requester_id}")]
-                ])
-            )
-            await query.edit_message_text("✅ درخواست عکس ارسال شد!")
-        else:
-            await query.edit_message_text("❌ کاربر مورد نظر عکسی ندارد!")
-    except Exception as e:
-        logger.error(f"Error requesting photo: {e}")
-        await query.edit_message_text("❌ ارسال درخواست ناموفق!")
-
-async def handle_photo_request(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    query = update.callback_query
-    await query.answer()
-    
-    try:
-        parts = query.data.split('_', 1)
-        if len(parts) != 2:
-            await query.edit_message_text("❌ خطا در پردازش!", reply_markup=main_menu_keyboard())
-            return
-        action = parts[0]
-        requester_id = int(parts[1])
-    except Exception as e:
-        logger.error(f"Error in handle_photo_request: {e}")
-        await query.edit_message_text("❌ خطا در پردازش!", reply_markup=main_menu_keyboard())
-        return
-    
-    target_id = update.effective_user.id
-    
-    if action == "accept_photo":
-        user = get_user_dict(target_id)
-        if user and user['photo_file_id']:
-            try:
-                await context.bot.send_photo(
-                    requester_id,
-                    user['photo_file_id'],
-                    caption="📸 عکس درخواستی:"
-                )
-                await query.edit_message_text("✅ عکس ارسال شد!")
-            except Exception as e:
-                logger.error(f"Error sending photo: {e}")
-                await query.edit_message_text("❌ خطا در ارسال عکس!")
-        else:
-            await query.edit_message_text("❌ شما عکسی ندارید!")
-    
-    elif action == "reject_photo":
+    if user and user['photo_file_id']:
         try:
-            await context.bot.send_message(
+            # مستقیم عکس رو بفرست
+            await context.bot.send_photo(
                 requester_id,
-                "❌ طرف مقابل اجازه ارسال عکس نداد!"
+                user['photo_file_id'],
+                caption="📸 عکس درخواستی:"
             )
-            await query.edit_message_text("🙅 درخواست رد شد!")
+            await query.edit_message_text("✅ عکس ارسال شد!")
         except Exception as e:
-            logger.error(f"Error rejecting photo: {e}")
-            await query.edit_message_text("🙅 درخواست رد شد!")
+            logger.error(f"Error sending photo: {e}")
+            await query.edit_message_text("❌ خطا در ارسال عکس!")
+    else:
+        await query.edit_message_text("❌ کاربر مورد نظر عکسی ندارد!")
 
 async def close_chat(update: Update, context: ContextTypes.DEFAULT_TYPE):
     query = update.callback_query
@@ -1462,7 +1398,7 @@ async def my_requests(update: Update, context: ContextTypes.DEFAULT_TYPE):
             message += f"🎯 هدف: {from_user['purpose']}\n\n"
             keyboard.append([InlineKeyboardButton(
                 f"👀 مشاهده و پاسخ",
-                callback_data=f"view_requester_{from_user['user_id']}"
+                callback_data=f"view_{from_user['user_id']}"
             )])
     
     keyboard.append([InlineKeyboardButton("🔙 برگشت به منو", callback_data="back_to_menu")])
@@ -1607,18 +1543,17 @@ def main():
     application.add_handler(MessageHandler(filters.PHOTO, handle_profile_text_input))
     
     # جستجو
-    application.add_handler(CallbackQueryHandler(candidate_action, pattern='^(like|dislike|more_info)_'))
+    application.add_handler(CallbackQueryHandler(candidate_action, pattern='^(like|dislike|more)_'))
     application.add_handler(CallbackQueryHandler(show_candidate, pattern='^next_candidate$'))
-    application.add_handler(CallbackQueryHandler(back_to_candidate, pattern='^back_to_candidate_'))
+    application.add_handler(CallbackQueryHandler(back_to_candidate, pattern='^back_'))
     
     # درخواست‌ها
-    application.add_handler(CallbackQueryHandler(view_requester, pattern='^view_requester_'))
+    application.add_handler(CallbackQueryHandler(view_requester, pattern='^view_'))
     application.add_handler(CallbackQueryHandler(handle_request, pattern='^(accept|reject)_'))
     
     # چت
-    application.add_handler(CallbackQueryHandler(start_chat, pattern='^start_chat_'))
-    application.add_handler(CallbackQueryHandler(request_photo, pattern='^request_photo_'))
-    application.add_handler(CallbackQueryHandler(handle_photo_request, pattern='^(accept|reject)_photo_'))
+    application.add_handler(CallbackQueryHandler(start_chat, pattern='^chat_'))
+    application.add_handler(CallbackQueryHandler(request_photo, pattern='^photo_'))
     application.add_handler(CallbackQueryHandler(close_chat, pattern='^close_chat$'))
     application.add_handler(CallbackQueryHandler(block_user, pattern='^block_'))
     application.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, handle_chat_message))
