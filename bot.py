@@ -684,8 +684,12 @@ async def candidate_action(update: Update, context: ContextTypes.DEFAULT_TYPE):
     await query.answer()
     
     try:
-        action, target_id = query.data.split('_', 1)
-        target_id = int(target_id)
+        parts = query.data.split('_', 1)
+        if len(parts) != 2:
+            await query.edit_message_text("❌ خطا در پردازش!", reply_markup=main_menu_keyboard())
+            return
+        action = parts[0]
+        target_id = int(parts[1])
     except Exception as e:
         logger.error(f"Error in candidate_action: {e}")
         await query.edit_message_text("❌ خطا در پردازش!", reply_markup=main_menu_keyboard())
@@ -778,8 +782,11 @@ async def view_requester(update: Update, context: ContextTypes.DEFAULT_TYPE):
     await query.answer()
     
     try:
-        action, requester_id = query.data.split('_', 1)
-        requester_id = int(requester_id)
+        parts = query.data.split('_')
+        if len(parts) != 3:
+            await query.edit_message_text("❌ خطا در پردازش! فرمت: view_requester_123", reply_markup=main_menu_keyboard())
+            return
+        requester_id = int(parts[2])
     except Exception as e:
         logger.error(f"Error in view_requester: {e}")
         await query.edit_message_text("❌ خطا در پردازش!", reply_markup=main_menu_keyboard())
@@ -809,7 +816,6 @@ async def view_requester(update: Update, context: ContextTypes.DEFAULT_TYPE):
         [InlineKeyboardButton("🔙 برگشت", callback_data="back_to_menu")]
     ]
     
-    # ارسال عکس اگر وجود داشته باشه
     if requester.get('photo_file_id'):
         try:
             await query.message.delete()
@@ -837,8 +843,12 @@ async def handle_request(update: Update, context: ContextTypes.DEFAULT_TYPE):
     await query.answer()
     
     try:
-        action, user_id = query.data.split('_', 1)
-        user_id = int(user_id)
+        parts = query.data.split('_')
+        if len(parts) != 3:
+            await query.edit_message_text("❌ خطا در پردازش! فرمت: accept_request_123", reply_markup=main_menu_keyboard())
+            return
+        action = parts[0]
+        user_id = int(parts[2])
     except Exception as e:
         logger.error(f"Error in handle_request: {e}")
         await query.edit_message_text("❌ خطا در پردازش!", reply_markup=main_menu_keyboard())
@@ -857,7 +867,7 @@ async def handle_request(update: Update, context: ContextTypes.DEFAULT_TYPE):
         conn.close()
         return
     
-    if action == "accept_request":
+    if action == "accept":
         c.execute("""
             UPDATE requests SET status='accepted' 
             WHERE from_user=? AND to_user=? AND status='pending'
@@ -892,7 +902,7 @@ async def handle_request(update: Update, context: ContextTypes.DEFAULT_TYPE):
             ])
         )
     
-    elif action == "reject_request":
+    elif action == "reject":
         c.execute("""
             UPDATE requests SET status='rejected' 
             WHERE from_user=? AND to_user=? AND status='pending'
@@ -923,7 +933,7 @@ async def start_chat(update: Update, context: ContextTypes.DEFAULT_TYPE):
     try:
         parts = query.data.split('_')
         if len(parts) != 3:
-            await query.edit_message_text("❌ خطا در پردازش!", reply_markup=main_menu_keyboard())
+            await query.edit_message_text("❌ خطا در پردازش! فرمت: start_chat_123", reply_markup=main_menu_keyboard())
             return
         chat_id = int(parts[2])
     except Exception as e:
