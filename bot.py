@@ -990,6 +990,9 @@ async def start_chat(update: Update, context: ContextTypes.DEFAULT_TYPE):
     
     other_user = chat[1] if chat[0] == current_user else chat[0]
     
+    # لاگ برای دیباگ
+    logger.info(f"💬 Starting chat: chat_id={chat_id}, user={current_user}, partner={other_user}")
+    
     context.user_data['active_chat'] = chat_id
     context.user_data['chat_partner'] = other_user
     
@@ -1008,7 +1011,6 @@ async def start_chat(update: Update, context: ContextTypes.DEFAULT_TYPE):
         await query.message.delete()
     except:
         pass
-
 async def handle_chat_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
     if 'active_chat' not in context.user_data:
         await update.message.reply_text(
@@ -1021,6 +1023,9 @@ async def handle_chat_message(update: Update, context: ContextTypes.DEFAULT_TYPE
     chat_id = context.user_data['active_chat']
     sender_id = update.effective_user.id
     partner_id = context.user_data['chat_partner']
+    
+    # لاگ برای دیباگ
+    logger.info(f"🔍 Chat Message: chat_id={chat_id}, sender={sender_id}, partner={partner_id}")
     
     conn = sqlite3.connect('matchbot.db')
     c = conn.cursor()
@@ -1047,18 +1052,22 @@ async def handle_chat_message(update: Update, context: ContextTypes.DEFAULT_TYPE
     if update.message.text:
         message_text = update.message.text
         message_type = "text"
+        logger.info(f"📝 Text message: {message_text}")
     elif update.message.photo:
         message_type = "photo"
         file_id = update.message.photo[-1].file_id
         message_text = "📸 عکس"
+        logger.info(f"📸 Photo message: {file_id}")
     elif update.message.sticker:
         message_type = "sticker"
         file_id = update.message.sticker.file_id
         message_text = "🎨 استیکر"
+        logger.info(f"🎨 Sticker message: {file_id}")
     elif update.message.animation:
         message_type = "gif"
         file_id = update.message.animation.file_id
         message_text = "🎬 گیف"
+        logger.info(f"🎬 GIF message: {file_id}")
     elif update.message.video:
         message_type = "video"
         file_id = update.message.video.file_id
@@ -1085,29 +1094,34 @@ async def handle_chat_message(update: Update, context: ContextTypes.DEFAULT_TYPE
     conn.close()
     
     try:
-        # ========== درست شد ==========
+        logger.info(f"📤 Sending to partner {partner_id}...")
+        
         if message_type == "text":
             await context.bot.send_message(
-                partner_id,  # فقط آیدی عددی
+                partner_id,
                 f"📩 پیام جدید:\n\n{message_text}"
             )
+            logger.info(f"✅ Text sent to {partner_id}")
         elif message_type == "photo":
             await context.bot.send_photo(
                 partner_id,
                 file_id,
                 caption="📸 عکس جدید"
             )
+            logger.info(f"✅ Photo sent to {partner_id}")
         elif message_type == "sticker":
             await context.bot.send_sticker(
                 partner_id,
                 file_id
             )
+            logger.info(f"✅ Sticker sent to {partner_id}")
         elif message_type == "gif":
             await context.bot.send_animation(
                 partner_id,
                 file_id,
                 caption="🎬 گیف جدید"
             )
+            logger.info(f"✅ GIF sent to {partner_id}")
         elif message_type == "video":
             await context.bot.send_video(
                 partner_id,
@@ -1128,8 +1142,9 @@ async def handle_chat_message(update: Update, context: ContextTypes.DEFAULT_TYPE
         await update.message.reply_text("✅")
         
     except Exception as e:
-        logger.error(f"Error sending message to partner: {e}")
-        await update.message.reply_text(f"❌ ارسال ناموفق! خطا: {str(e)}")
+        logger.error(f"❌ Error sending to partner {partner_id}: {e}")
+        await update.message.reply_text(f"❌ ارسال ناموفق!")
+        
 async def request_photo(update: Update, context: ContextTypes.DEFAULT_TYPE):
     query = update.callback_query
     await query.answer()
