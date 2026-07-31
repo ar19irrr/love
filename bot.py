@@ -434,7 +434,7 @@ async def handle_photo_upload(update: Update, context: ContextTypes.DEFAULT_TYPE
                 [InlineKeyboardButton("✅ ادامه", callback_data="photo_done")]
             ])
         )
-        return PHOTO  # <--- مهم: به PHOTO برگرد تا کاربر دکمه ادامه رو بزنه
+        return PHOTO
     else:
         await update.message.reply_text(
             "❌ لطفاً یک عکس بفرست!",
@@ -444,6 +444,11 @@ async def handle_photo_upload(update: Update, context: ContextTypes.DEFAULT_TYPE
         )
         return PHOTO
 
+async def photo_done(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    query = update.callback_query
+    await query.answer()
+    await show_privacy_settings(update, context)
+    return PRIVACY
 async def skip_photo(update: Update, context: ContextTypes.DEFAULT_TYPE):
     query = update.callback_query
     await query.answer()
