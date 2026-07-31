@@ -185,12 +185,12 @@ async def gender_selection(update: Update, context: ContextTypes.DEFAULT_TYPE):
     }
     context.user_data['gender'] = gender_map[query.data]
     
-    await query.edit_message_text(
-        "🌸 چند بهار رو پشت سر گذاشتی؟\n"
-        "(فقط عدد وارد کن)",
-        reply_markup=None
-    )
-    return AGE
+   await query.edit_message_text(
+    "🌸 چند سالت هست؟\n"
+    "(مثلاً: ۲۵)\n"
+    "فقط عدد وارد کن:",
+    reply_markup=None
+)
 
 async def age_input(update: Update, context: ContextTypes.DEFAULT_TYPE):
     try:
