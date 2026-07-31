@@ -784,7 +784,7 @@ async def view_requester(update: Update, context: ContextTypes.DEFAULT_TYPE):
     # ارسال عکس اگر وجود داشته باشه
     keyboard = [
         [InlineKeyboardButton("✅ تایید", callback_data=f"accept_request_{requester_id}")],
-        [InlineKeyboardButton("❌ رد کردن", callback_data=f"reject_request_{requester_id}"]),
+        [InlineKeyboardButton("❌ رد کردن", callback_data=f"reject_request_{requester_id}")],
         [InlineKeyboardButton("🔙 برگشت", callback_data="back_to_menu")]
     ]
     
@@ -1265,11 +1265,10 @@ async def update_profile_field(update: Update, context: ContextTypes.DEFAULT_TYP
 async def handle_profile_text_input(update: Update, context: ContextTypes.DEFAULT_TYPE):
     user_id = update.effective_user.id
     field = context.user_data.get('editing_field')
-    text = update.message.text
     
     if field == 'age':
         try:
-            age = int(text)
+            age = int(update.message.text)
             if 10 <= age <= 100:
                 save_user(user_id, {'age': age})
                 await update.message.reply_text("✅ سن به‌روز شد!", reply_markup=main_menu_keyboard())
@@ -1279,10 +1278,11 @@ async def handle_profile_text_input(update: Update, context: ContextTypes.DEFAUL
             await update.message.reply_text("❌ لطفاً عدد وارد کن!")
     
     elif field == 'city':
-        save_user(user_id, {'city': text})
+        save_user(user_id, {'city': update.message.text})
         await update.message.reply_text("✅ شهر به‌روز شد!", reply_markup=main_menu_keyboard())
     
     elif field == 'description':
+        text = update.message.text
         if len(text) > 200:
             await update.message.reply_text("❌ حداکثر ۲۰۰ کاراکتر!")
             return
