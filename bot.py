@@ -185,12 +185,13 @@ async def gender_selection(update: Update, context: ContextTypes.DEFAULT_TYPE):
     }
     context.user_data['gender'] = gender_map[query.data]
     
-   await query.edit_message_text(
-    "🌸 چند سالت هست؟\n"
-    "(مثلاً: ۲۵)\n"
-    "فقط عدد وارد کن:",
-    reply_markup=None
-)
+    await query.edit_message_text(
+        "🌸 چند سالت هست؟\n"
+        "(مثلاً: ۲۵)\n"
+        "فقط عدد وارد کن:",
+        reply_markup=None
+    )
+    return AGE
 
 async def age_input(update: Update, context: ContextTypes.DEFAULT_TYPE):
     try:
@@ -444,26 +445,20 @@ async def handle_photo_upload(update: Update, context: ContextTypes.DEFAULT_TYPE
         )
         return PHOTO
 
-async def photo_done(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    query = update.callback_query
-    await query.answer()
-    await show_privacy_settings(update, context)
-    return PRIVACY
 async def skip_photo(update: Update, context: ContextTypes.DEFAULT_TYPE):
     query = update.callback_query
     await query.answer()
     context.user_data['photo'] = None
     
     await show_privacy_settings(update, context)
-    return PRIVACY  # <--- به مرحله حریم خصوصی برو
+    return PRIVACY
 
 async def photo_done(update: Update, context: ContextTypes.DEFAULT_TYPE):
     query = update.callback_query
     await query.answer()
     
-    # عکس قبلاً تو handle_photo_upload ذخیره شده
     await show_privacy_settings(update, context)
-    return PRIVACY  # <--- به مرحله حریم خصوصی برو
+    return PRIVACY
 
 # ==================== حریم خصوصی ====================
 
@@ -1574,7 +1569,7 @@ def main():
     # حریم خصوصی
     application.add_handler(CallbackQueryHandler(privacy_toggle, pattern='^privacy_toggle_(age|city|change_visibility)$'))
     
-    # ============ اجرا با Polling ============
+    # ============ اجرا ============
     
     logger.info("Bot started with Polling!")
     application.run_polling(allowed_updates=Update.ALL_TYPES)
