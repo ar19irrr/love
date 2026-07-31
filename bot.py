@@ -8,7 +8,6 @@ from telegram.ext import Application, CommandHandler, CallbackQueryHandler, Mess
 
 # تنظیمات اولیه
 TOKEN = os.environ.get('TOKEN', "YOUR_BOT_TOKEN_HERE")
-PORT = int(os.environ.get('PORT', 8443))
 
 # فعال کردن logging
 logging.basicConfig(
@@ -22,7 +21,6 @@ def init_db():
     conn = sqlite3.connect('matchbot.db')
     c = conn.cursor()
     
-    # جدول کاربران با فیلد عکس
     c.execute('''CREATE TABLE IF NOT EXISTS users (
         user_id INTEGER PRIMARY KEY,
         gender TEXT,
@@ -44,7 +42,6 @@ def init_db():
         is_setup_complete BOOLEAN DEFAULT 0
     )''')
     
-    # جدول درخواست‌ها
     c.execute('''CREATE TABLE IF NOT EXISTS requests (
         id INTEGER PRIMARY KEY AUTOINCREMENT,
         from_user INTEGER,
@@ -54,7 +51,6 @@ def init_db():
         expires_at TIMESTAMP
     )''')
     
-    # جدول چت‌ها
     c.execute('''CREATE TABLE IF NOT EXISTS chats (
         id INTEGER PRIMARY KEY AUTOINCREMENT,
         user1 INTEGER,
@@ -65,7 +61,6 @@ def init_db():
         blocked_by INTEGER DEFAULT NULL
     )''')
     
-    # جدول پیام‌ها
     c.execute('''CREATE TABLE IF NOT EXISTS messages (
         id INTEGER PRIMARY KEY AUTOINCREMENT,
         chat_id INTEGER,
@@ -76,7 +71,6 @@ def init_db():
         is_read BOOLEAN DEFAULT 0
     )''')
     
-    # جدول ردها
     c.execute('''CREATE TABLE IF NOT EXISTS rejected (
         user_id INTEGER,
         rejected_user_id INTEGER,
@@ -84,7 +78,6 @@ def init_db():
         PRIMARY KEY (user_id, rejected_user_id)
     )''')
     
-    # جدول درخواست عکس
     c.execute('''CREATE TABLE IF NOT EXISTS photo_requests (
         id INTEGER PRIMARY KEY AUTOINCREMENT,
         requester_id INTEGER,
@@ -96,9 +89,8 @@ def init_db():
     
     conn.commit()
     conn.close()
-    logger.info("Database initialized successfully!")
+    logger.info("Database initialized!")
 
-# Helper functions
 def get_user(user_id):
     conn = sqlite3.connect('matchbot.db')
     c = conn.cursor()
@@ -139,7 +131,6 @@ def save_user(user_id, data):
 # مرحله‌های ثبت‌نام
 GENDER, AGE, PURPOSE, CITY, AGE_MIN, AGE_MAX, INTERESTS, JOB_STATUS, DESCRIPTION, PHOTO, PRIVACY = range(11)
 
-# دکمه‌های اصلی
 def main_menu_keyboard():
     keyboard = [
         [InlineKeyboardButton("🔍 جستجو", callback_data="search")],
@@ -152,7 +143,8 @@ def main_menu_keyboard():
     ]
     return InlineKeyboardMarkup(keyboard)
 
-# شروع
+# ==================== شروع و ثبت‌نام ====================
+
 async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
     user_id = update.effective_user.id
     user = get_user(user_id)
@@ -275,24 +267,52 @@ async def age_max_input(update: Update, context: ContextTypes.DEFAULT_TYPE):
         await update.message.reply_text("❌ لطفاً فقط عدد وارد کن:")
         return AGE_MAX
     
-    interests = [
-        ["🎬 فیلم", "📚 کتاب", "🎵 موسیقی"],
-        ["🏋️ ورزش", "🍳 آشپزی", "🎮 بازی"],
-        ["🧳 سفر", "🌿 طبیعت", "✏️ نقاشی"],
-        ["💻 تکنولوژی", "🧘 مدیتیشن", "🐱 حیوانات"]
+    await show_interests(update, context)
+    return INTERESTS
+
+def get_interests_keyboard(selected=None):
+    if selected is None:
+        selected = []
+    
+    interests_list = [
+        "🎬 فیلم", "📚 کتاب", "🎵 موسیقی",
+        "🏋️ ورزش", "🍳 آشپزی", "🎮 بازی",
+        "🧳 سفر", "🌿 طبیعت", "✏️ نقاشی",
+        "💻 تکنولوژی", "🧘 مدیتیشن", "🐱 حیوانات"
     ]
     
     keyboard = []
-    for row in interests:
-        keyboard.append([InlineKeyboardButton(item, callback_data=f"interest_{item}") for item in row])
-    keyboard.append([InlineKeyboardButton("✅ تموم شد", callback_data="interests_done")])
+    for i in range(0, len(interests_list), 3):
+        row = []
+        for item in interests_list[i:i+3]:
+            if item in selected:
+                row.append(InlineKeyboardButton(f"✅ {item}", callback_data=f"interest_{item}"))
+            else:
+                row.append(InlineKeyboardButton(f"⬜ {item}", callback_data=f"interest_{item}"))
+        keyboard.append(row)
     
-    await update.message.reply_text(
-        "🎨 چه چیزهایی رو دوست داری؟\n"
-        "چند تا انتخاب کن و بعد روی 'تموم شد' بزن:",
-        reply_markup=InlineKeyboardMarkup(keyboard)
-    )
-    return INTERESTS
+    keyboard.append([InlineKeyboardButton("✅ تموم شد", callback_data="interests_done")])
+    return InlineKeyboardMarkup(keyboard)
+
+async def show_interests(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    if 'interests' not in context.user_data:
+        context.user_data['interests'] = []
+    
+    text = "🎨 چه چیزهایی رو دوست داری؟\n"
+    text += f"انتخاب شده: {', '.join(context.user_data['interests']) if context.user_data['interests'] else 'هیچ'}\n\n"
+    text += "روی هر گزینه بزن تا انتخاب یا حذف بشه (حداکثر ۵ تا):"
+    
+    if isinstance(update, Update) and update.callback_query:
+        query = update.callback_query
+        await query.edit_message_text(
+            text,
+            reply_markup=get_interests_keyboard(context.user_data['interests'])
+        )
+    else:
+        await update.message.reply_text(
+            text,
+            reply_markup=get_interests_keyboard(context.user_data['interests'])
+        )
 
 async def interests_selection(update: Update, context: ContextTypes.DEFAULT_TYPE):
     query = update.callback_query
@@ -307,8 +327,11 @@ async def interests_selection(update: Update, context: ContextTypes.DEFAULT_TYPE
                 "❌ حداقل یک علاقه انتخاب کن!",
                 reply_markup=None
             )
+            # دوباره لیست رو نشون بده
+            await show_interests(update, context)
             return INTERESTS
         
+        # برو به مرحله بعد
         await query.edit_message_text(
             "💼 وضعیت شغلی/تحصیلیت چیه؟",
             reply_markup=InlineKeyboardMarkup([
@@ -320,43 +343,22 @@ async def interests_selection(update: Update, context: ContextTypes.DEFAULT_TYPE
         )
         return JOB_STATUS
     
+    # مدیریت انتخاب علاقه
     interest = query.data.replace("interest_", "")
     if interest in context.user_data['interests']:
         context.user_data['interests'].remove(interest)
-        await query.edit_message_text(
-            f"❌ {interest} حذف شد!",
-            reply_markup=None
-        )
     else:
         if len(context.user_data['interests']) >= 5:
             await query.edit_message_text(
                 "❌ حداکثر ۵ علاقه می‌تونی انتخاب کنی!",
                 reply_markup=None
             )
+            await show_interests(update, context)
             return INTERESTS
         context.user_data['interests'].append(interest)
-        await query.edit_message_text(
-            f"✅ {interest} اضافه شد!",
-            reply_markup=None
-        )
     
-    interests = [
-        ["🎬 فیلم", "📚 کتاب", "🎵 موسیقی"],
-        ["🏋️ ورزش", "🍳 آشپزی", "🎮 بازی"],
-        ["🧳 سفر", "🌿 طبیعت", "✏️ نقاشی"],
-        ["💻 تکنولوژی", "🧘 مدیتیشن", "🐱 حیوانات"]
-    ]
-    
-    keyboard = []
-    for row in interests:
-        keyboard.append([InlineKeyboardButton(item, callback_data=f"interest_{item}") for item in row])
-    keyboard.append([InlineKeyboardButton("✅ تموم شد", callback_data="interests_done")])
-    
-    await query.message.reply_text(
-        f"علایق فعلی: {', '.join(context.user_data['interests'])}\n\n"
-        "می‌تونی اضافه یا حذف کنی:",
-        reply_markup=InlineKeyboardMarkup(keyboard)
-    )
+    # نمایش مجدد لیست
+    await show_interests(update, context)
     return INTERESTS
 
 async def job_status_selection(update: Update, context: ContextTypes.DEFAULT_TYPE):
@@ -426,7 +428,7 @@ async def handle_photo_upload(update: Update, context: ContextTypes.DEFAULT_TYPE
         await update.message.reply_text(
             "✅ عکس شما با موفقیت ذخیره شد!",
             reply_markup=InlineKeyboardMarkup([
-                [InlineKeyboardButton("✅ ادامه", callback_data="privacy_done")]
+                [InlineKeyboardButton("✅ ادامه", callback_data="photo_done")]
             ])
         )
         return PRIVACY
@@ -443,6 +445,13 @@ async def skip_photo(update: Update, context: ContextTypes.DEFAULT_TYPE):
     query = update.callback_query
     await query.answer()
     context.user_data['photo'] = None
+    
+    await show_privacy_settings(update, context)
+    return PRIVACY
+
+async def photo_done(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    query = update.callback_query
+    await query.answer()
     
     await show_privacy_settings(update, context)
     return PRIVACY
@@ -562,7 +571,7 @@ async def finish_registration(update: Update, context: ContextTypes.DEFAULT_TYPE
         )
     return ConversationHandler.END
 
-# ============== منوی اصلی ==============
+# ==================== منوی اصلی ====================
 
 async def search(update: Update, context: ContextTypes.DEFAULT_TYPE):
     query = update.callback_query
@@ -755,7 +764,7 @@ async def back_to_candidate(update: Update, context: ContextTypes.DEFAULT_TYPE):
     await query.answer()
     await show_candidate(update, context)
 
-# ============== مشاهده پروفایل و مدیریت درخواست‌ها ==============
+# ==================== مشاهده پروفایل و مدیریت درخواست‌ها ====================
 
 async def view_requester(update: Update, context: ContextTypes.DEFAULT_TYPE):
     query = update.callback_query
@@ -773,7 +782,6 @@ async def view_requester(update: Update, context: ContextTypes.DEFAULT_TYPE):
         await query.edit_message_text("❌ کاربر پیدا نشد!", reply_markup=main_menu_keyboard())
         return
     
-    # اطلاعات پروفایل
     message = f"👤 اطلاعات درخواست‌دهنده:\n\n"
     message += f"جنسیت: {requester['gender']}\n"
     message += f"سن: {requester['age'] if requester['privacy_age'] else '❌ مخفی'}\n"
@@ -793,7 +801,6 @@ async def view_requester(update: Update, context: ContextTypes.DEFAULT_TYPE):
         [InlineKeyboardButton("🔙 برگشت", callback_data="back_to_menu")]
     ]
     
-    # اگر عکس داره، همراه با عکس بفرست
     if requester.get('photo_file_id'):
         try:
             await query.message.delete()
@@ -807,7 +814,6 @@ async def view_requester(update: Update, context: ContextTypes.DEFAULT_TYPE):
         except Exception as e:
             logger.error(f"Error sending photo: {e}")
     
-    # اگر عکس نداشت یا خطا خورد، فقط متن
     await query.edit_message_text(
         message,
         reply_markup=InlineKeyboardMarkup(keyboard)
@@ -829,7 +835,6 @@ async def handle_request(update: Update, context: ContextTypes.DEFAULT_TYPE):
     conn = sqlite3.connect('matchbot.db')
     c = conn.cursor()
     
-    # بررسی وجود درخواست
     c.execute("SELECT * FROM requests WHERE from_user=? AND to_user=? AND status='pending'", (user_id, current_user))
     request_exists = c.fetchone()
     
@@ -839,13 +844,11 @@ async def handle_request(update: Update, context: ContextTypes.DEFAULT_TYPE):
         return
     
     if action == "accept_request":
-        # بروزرسانی وضعیت درخواست
         c.execute("""
             UPDATE requests SET status='accepted' 
             WHERE from_user=? AND to_user=? AND status='pending'
         """, (user_id, current_user))
         
-        # ایجاد چت جدید
         c.execute("""
             INSERT INTO chats (user1, user2, match_date, expiry_date)
             VALUES (?, ?, ?, ?)
@@ -855,7 +858,6 @@ async def handle_request(update: Update, context: ContextTypes.DEFAULT_TYPE):
         conn.commit()
         conn.close()
         
-        # اطلاع به طرف مقابل (درخواست‌دهنده)
         try:
             await context.bot.send_message(
                 user_id,
@@ -868,7 +870,6 @@ async def handle_request(update: Update, context: ContextTypes.DEFAULT_TYPE):
         except Exception as e:
             logger.error(f"Error notifying requester: {e}")
         
-        # به کاربر فعلی (پذیرنده)
         await query.edit_message_text(
             "🎉 هورا! شما همدیگرو پسندیدین!\n"
             "چت شما فعال شد.",
@@ -885,7 +886,6 @@ async def handle_request(update: Update, context: ContextTypes.DEFAULT_TYPE):
         conn.commit()
         conn.close()
         
-        # اطلاع به درخواست‌دهنده
         try:
             await context.bot.send_message(
                 user_id,
@@ -900,7 +900,7 @@ async def handle_request(update: Update, context: ContextTypes.DEFAULT_TYPE):
             reply_markup=main_menu_keyboard()
         )
 
-# ============== چت ==============
+# ==================== چت ====================
 
 async def start_chat(update: Update, context: ContextTypes.DEFAULT_TYPE):
     query = update.callback_query
@@ -1082,7 +1082,7 @@ async def block_user(update: Update, context: ContextTypes.DEFAULT_TYPE):
         reply_markup=main_menu_keyboard()
     )
 
-# ============== ویرایش پروفایل ==============
+# ==================== ویرایش پروفایل ====================
 
 async def edit_profile(update: Update, context: ContextTypes.DEFAULT_TYPE):
     query = update.callback_query
@@ -1170,33 +1170,14 @@ async def edit_profile_field(update: Update, context: ContextTypes.DEFAULT_TYPE)
         context.user_data['editing_field'] = 'city'
     
     elif field == "interests":
-        interests_list = [
-            "🎬 فیلم", "📚 کتاب", "🎵 موسیقی",
-            "🏋️ ورزش", "🍳 آشپزی", "🎮 بازی",
-            "🧳 سفر", "🌿 طبیعت", "✏️ نقاشی",
-            "💻 تکنولوژی", "🧘 مدیتیشن", "🐱 حیوانات"
-        ]
-        
-        current_interests = json.loads(user['interests']) if user['interests'] else []
-        keyboard = []
-        
-        for i in range(0, len(interests_list), 3):
-            row = []
-            for item in interests_list[i:i+3]:
-                icon = "✅" if item in current_interests else "⬜"
-                row.append(InlineKeyboardButton(f"{icon} {item}", callback_data=f"update_interest_{item}"))
-            keyboard.append(row)
-        
-        keyboard.append([InlineKeyboardButton("💾 ذخیره تغییرات", callback_data="update_interests_done")])
-        keyboard.append([InlineKeyboardButton("🔙 برگشت", callback_data="edit_profile")])
-        
-        context.user_data['editing_interests'] = current_interests
-        
         await query.edit_message_text(
-            f"علایق فعلی: {', '.join(current_interests) if current_interests else '❌ ندارد'}\n\n"
-            "روی هر گزینه بزن تا اضافه یا حذف بشه (حداکثر ۵ تا):",
-            reply_markup=InlineKeyboardMarkup(keyboard)
+            "🎨 علایق جدید رو انتخاب کن (حداکثر ۵ تا):",
+            reply_markup=get_interests_keyboard(
+                json.loads(user['interests']) if user['interests'] else []
+            )
         )
+        context.user_data['editing_interests'] = json.loads(user['interests']) if user['interests'] else []
+        context.user_data['editing_field'] = 'interests'
     
     elif field == "job":
         await query.edit_message_text(
@@ -1268,15 +1249,19 @@ async def update_profile_field(update: Update, context: ContextTypes.DEFAULT_TYP
                 return
             context.user_data['editing_interests'].append(interest)
         
+        # نمایش مجدد
         await edit_profile_field(update, context)
     
     elif data == "interests_done":
         if not context.user_data.get('editing_interests', []):
             await query.edit_message_text("❌ حداقل یک علاقه انتخاب کن!", reply_markup=None)
+            # نمایش مجدد
+            await edit_profile_field(update, context)
             return
         
         save_user(user_id, {'interests': json.dumps(context.user_data['editing_interests'])})
         context.user_data.pop('editing_interests', None)
+        context.user_data.pop('editing_field', None)
         await query.edit_message_text("✅ علایق به‌روز شد!", reply_markup=main_menu_keyboard())
 
 async def handle_profile_text_input(update: Update, context: ContextTypes.DEFAULT_TYPE):
@@ -1317,7 +1302,7 @@ async def handle_profile_text_input(update: Update, context: ContextTypes.DEFAUL
     
     context.user_data.pop('editing_field', None)
 
-# ============== حریم خصوصی ==============
+# ==================== حریم خصوصی ====================
 
 async def privacy_settings(update: Update, context: ContextTypes.DEFAULT_TYPE):
     query = update.callback_query
@@ -1379,7 +1364,7 @@ async def privacy_toggle(update: Update, context: ContextTypes.DEFAULT_TYPE):
     
     await privacy_settings(update, context)
 
-# ============== درخواست‌های من ==============
+# ==================== درخواست‌های من ====================
 
 async def my_requests(update: Update, context: ContextTypes.DEFAULT_TYPE):
     query = update.callback_query
@@ -1427,7 +1412,7 @@ async def my_requests(update: Update, context: ContextTypes.DEFAULT_TYPE):
         reply_markup=InlineKeyboardMarkup(keyboard)
     )
 
-# ============== آمار ==============
+# ==================== آمار ====================
 
 async def stats(update: Update, context: ContextTypes.DEFAULT_TYPE):
     query = update.callback_query
@@ -1457,7 +1442,7 @@ async def stats(update: Update, context: ContextTypes.DEFAULT_TYPE):
         reply_markup=main_menu_keyboard()
     )
 
-# ============== ریست ==============
+# ==================== ریست ====================
 
 async def reset_bot(update: Update, context: ContextTypes.DEFAULT_TYPE):
     query = update.callback_query
@@ -1477,7 +1462,7 @@ async def reset_bot(update: Update, context: ContextTypes.DEFAULT_TYPE):
         reply_markup=None
     )
 
-# ============== راهنما ==============
+# ==================== راهنما ====================
 
 async def help_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
     query = update.callback_query
@@ -1500,7 +1485,7 @@ async def help_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
         reply_markup=main_menu_keyboard()
     )
 
-# ============== برگشت به منو ==============
+# ==================== برگشت به منو ====================
 
 async def back_to_menu(update: Update, context: ContextTypes.DEFAULT_TYPE):
     query = update.callback_query
@@ -1511,14 +1496,13 @@ async def back_to_menu(update: Update, context: ContextTypes.DEFAULT_TYPE):
         reply_markup=main_menu_keyboard()
     )
 
-# ============== تابع اصلی ==============
+# ==================== تابع اصلی ====================
 
 def main():
     init_db()
     
     application = Application.builder().token(TOKEN).build()
     
-    # هندلر مکالمه ثبت‌نام
     conv_handler = ConversationHandler(
         entry_points=[CommandHandler('start', start)],
         states={
@@ -1536,7 +1520,8 @@ def main():
             ],
             PHOTO: [
                 MessageHandler(filters.PHOTO, handle_photo_upload),
-                CallbackQueryHandler(skip_photo, pattern='^skip_photo$')
+                CallbackQueryHandler(skip_photo, pattern='^skip_photo$'),
+                CallbackQueryHandler(photo_done, pattern='^photo_done$')
             ],
             PRIVACY: [CallbackQueryHandler(privacy_selection, pattern='^(toggle_age|toggle_city|change_visibility|privacy_done)')],
         },
@@ -1581,7 +1566,6 @@ def main():
     # حریم خصوصی
     application.add_handler(CallbackQueryHandler(privacy_toggle, pattern='^privacy_toggle_(age|city|change_visibility)$'))
     
-    # اجرا
     logger.info("Bot started! Press Ctrl+C to stop.")
     application.run_polling(allowed_updates=Update.ALL_TYPES)
 
