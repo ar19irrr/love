@@ -684,21 +684,16 @@ async def candidate_action(update: Update, context: ContextTypes.DEFAULT_TYPE):
     await query.answer()
     
     try:
-        parts = query.data.split('_', 1)
-        if len(parts) != 2:
-            await query.edit_message_text("❌ خطا در پردازش!", reply_markup=main_menu_keyboard())
-            return
-        action = parts[0]
-        target_id = int(parts[1])
+        action, target_id = query.data.split('_', 1)
+        target_id = int(target_id)
     except Exception as e:
-        logger.error(f"Error parsing callback: {e}")
+        logger.error(f"Error in candidate_action: {e}")
         await query.edit_message_text("❌ خطا در پردازش!", reply_markup=main_menu_keyboard())
         return
     
     user_id = update.effective_user.id
     
     if action == "like":
-        # ثبت درخواست
         conn = sqlite3.connect('matchbot.db')
         c = conn.cursor()
         
@@ -710,7 +705,6 @@ async def candidate_action(update: Update, context: ContextTypes.DEFAULT_TYPE):
             """, (user_id, target_id, datetime.now(), datetime.now() + timedelta(days=3)))
             conn.commit()
             
-            # ارسال به طرف مقابل
             try:
                 target_user = get_user_dict(target_id)
                 if target_user:
@@ -750,7 +744,6 @@ async def candidate_action(update: Update, context: ContextTypes.DEFAULT_TYPE):
             reply_markup=None
         )
         
-        # برو به کاندیدای بعدی
         if 'candidate_index' in context.user_data:
             context.user_data['candidate_index'] += 1
         await show_candidate(update, context)
@@ -785,11 +778,8 @@ async def view_requester(update: Update, context: ContextTypes.DEFAULT_TYPE):
     await query.answer()
     
     try:
-        parts = query.data.split('_', 1)
-        if len(parts) != 2:
-            await query.edit_message_text("❌ خطا در پردازش!", reply_markup=main_menu_keyboard())
-            return
-        requester_id = int(parts[1])
+        action, requester_id = query.data.split('_', 1)
+        requester_id = int(requester_id)
     except Exception as e:
         logger.error(f"Error in view_requester: {e}")
         await query.edit_message_text("❌ خطا در پردازش!", reply_markup=main_menu_keyboard())
@@ -819,7 +809,7 @@ async def view_requester(update: Update, context: ContextTypes.DEFAULT_TYPE):
         [InlineKeyboardButton("🔙 برگشت", callback_data="back_to_menu")]
     ]
     
-    # اگر عکس داره، همراه با عکس بفرست
+    # ارسال عکس اگر وجود داشته باشه
     if requester.get('photo_file_id'):
         try:
             await query.message.delete()
@@ -832,23 +822,23 @@ async def view_requester(update: Update, context: ContextTypes.DEFAULT_TYPE):
             return
         except Exception as e:
             logger.error(f"Error sending photo: {e}")
-    
-    await query.edit_message_text(
-        message,
-        reply_markup=InlineKeyboardMarkup(keyboard)
-    )
+            await query.edit_message_text(
+                message,
+                reply_markup=InlineKeyboardMarkup(keyboard)
+            )
+    else:
+        await query.edit_message_text(
+            message,
+            reply_markup=InlineKeyboardMarkup(keyboard)
+        )
 
 async def handle_request(update: Update, context: ContextTypes.DEFAULT_TYPE):
     query = update.callback_query
     await query.answer()
     
     try:
-        parts = query.data.split('_', 1)
-        if len(parts) != 2:
-            await query.edit_message_text("❌ خطا در پردازش!", reply_markup=main_menu_keyboard())
-            return
-        action = parts[0]
-        user_id = int(parts[1])
+        action, user_id = query.data.split('_', 1)
+        user_id = int(user_id)
     except Exception as e:
         logger.error(f"Error in handle_request: {e}")
         await query.edit_message_text("❌ خطا در پردازش!", reply_markup=main_menu_keyboard())
@@ -859,7 +849,6 @@ async def handle_request(update: Update, context: ContextTypes.DEFAULT_TYPE):
     conn = sqlite3.connect('matchbot.db')
     c = conn.cursor()
     
-    # بررسی وجود درخواست
     c.execute("SELECT * FROM requests WHERE from_user=? AND to_user=? AND status='pending'", (user_id, current_user))
     request_exists = c.fetchone()
     
@@ -869,13 +858,11 @@ async def handle_request(update: Update, context: ContextTypes.DEFAULT_TYPE):
         return
     
     if action == "accept_request":
-        # بروزرسانی وضعیت درخواست
         c.execute("""
             UPDATE requests SET status='accepted' 
             WHERE from_user=? AND to_user=? AND status='pending'
         """, (user_id, current_user))
         
-        # ایجاد چت جدید
         c.execute("""
             INSERT INTO chats (user1, user2, match_date, expiry_date)
             VALUES (?, ?, ?, ?)
@@ -885,7 +872,6 @@ async def handle_request(update: Update, context: ContextTypes.DEFAULT_TYPE):
         conn.commit()
         conn.close()
         
-        # اطلاع به طرف مقابل (درخواست‌دهنده)
         try:
             await context.bot.send_message(
                 user_id,
@@ -898,7 +884,6 @@ async def handle_request(update: Update, context: ContextTypes.DEFAULT_TYPE):
         except Exception as e:
             logger.error(f"Error notifying requester: {e}")
         
-        # به کاربر فعلی (پذیرنده)
         await query.edit_message_text(
             "🎉 هورا! شما همدیگرو پسندیدین!\n"
             "چت شما فعال شد.",
@@ -915,7 +900,6 @@ async def handle_request(update: Update, context: ContextTypes.DEFAULT_TYPE):
         conn.commit()
         conn.close()
         
-        # اطلاع به درخواست‌دهنده
         try:
             await context.bot.send_message(
                 user_id,
