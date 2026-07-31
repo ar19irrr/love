@@ -979,6 +979,7 @@ async def start_chat(update: Update, context: ContextTypes.DEFAULT_TYPE):
         pass
 
 async def handle_chat_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    # چک کن کاربر توی چت هست
     if 'active_chat' not in context.user_data:
         await update.message.reply_text(
             "❌ شما در هیچ چتی نیستی!\n"
@@ -991,6 +992,7 @@ async def handle_chat_message(update: Update, context: ContextTypes.DEFAULT_TYPE
     sender_id = update.effective_user.id
     partner_id = context.user_data['chat_partner']
     
+    # چک کن چت فعاله
     conn = sqlite3.connect('matchbot.db')
     c = conn.cursor()
     c.execute("SELECT is_active, blocked_by FROM chats WHERE id=?", (chat_id,))
@@ -1009,6 +1011,7 @@ async def handle_chat_message(update: Update, context: ContextTypes.DEFAULT_TYPE
         context.user_data.pop('chat_partner', None)
         return
     
+    # تشخیص نوع پیام
     message_type = "text"
     message_text = ""
     file_id = None
@@ -1044,6 +1047,7 @@ async def handle_chat_message(update: Update, context: ContextTypes.DEFAULT_TYPE
         await update.message.reply_text("❌ این نوع پیام پشتیبانی نمی‌شه!")
         return
     
+    # ذخیره پیام
     conn = sqlite3.connect('matchbot.db')
     c = conn.cursor()
     c.execute("""
@@ -1053,26 +1057,44 @@ async def handle_chat_message(update: Update, context: ContextTypes.DEFAULT_TYPE
     conn.commit()
     conn.close()
     
+    # ======== اینجا مشکل بود ========
+    # ارسال به طرف مقابل (نه به خودش!)
     try:
         if message_type == "text":
-            await context.bot.send_message(partner_id, f"📩 پیام جدید:\n\n{message_text}")
+            await context.bot.send_message(
+                partner_id, 
+                f"📩 پیام از طرف مقابل:\n\n{message_text}"
+            )
         elif message_type == "photo":
-            await context.bot.send_photo(partner_id, file_id, caption="📸 عکس جدید")
+            await context.bot.send_photo(
+                partner_id, 
+                file_id, 
+                caption="📸 عکس جدید"
+            )
         elif message_type == "sticker":
             await context.bot.send_sticker(partner_id, file_id)
         elif message_type == "gif":
-            await context.bot.send_animation(partner_id, file_id, caption="🎬 گیف جدید")
+            await context.bot.send_animation(
+                partner_id, 
+                file_id, 
+                caption="🎬 گیف جدید"
+            )
         elif message_type == "video":
-            await context.bot.send_video(partner_id, file_id, caption="🎥 ویدیو جدید")
+            await context.bot.send_video(
+                partner_id, 
+                file_id, 
+                caption="🎥 ویدیو جدید"
+            )
         elif message_type == "voice":
             await context.bot.send_voice(partner_id, file_id)
         elif message_type == "audio":
             await context.bot.send_audio(partner_id, file_id)
         
-        await update.message.reply_text("✅ ارسال شد!")
+        # فقط یک تیک سبز به فرستنده نشون بده
+        await context.bot.send_message(partner_id, ...)("✅")
     except Exception as e:
         logger.error(f"Error sending message: {e}")
-        await update.message.reply_text("❌ ارسال ناموفق!")
+        await context.bot.send_message(partner_id, ...)("❌ ارسال ناموفق!")
 
 async def request_photo(update: Update, context: ContextTypes.DEFAULT_TYPE):
     query = update.callback_query
