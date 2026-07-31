@@ -9,14 +9,14 @@ from telegram.ext import Application, CommandHandler, CallbackQueryHandler, Mess
 # تنظیمات اولیه
 TOKEN = os.environ.get('TOKEN', "YOUR_BOT_TOKEN_HERE")
 
-# فعال کردن logging
 logging.basicConfig(
     format='%(asctime)s - %(name)s - %(levelname)s - %(message)s',
     level=logging.INFO
 )
 logger = logging.getLogger(__name__)
 
-# دیتابیس
+# ==================== دیتابیس ====================
+
 def init_db():
     conn = sqlite3.connect('matchbot.db')
     c = conn.cursor()
@@ -128,8 +128,11 @@ def save_user(user_id, data):
     conn.commit()
     conn.close()
 
-# مرحله‌های ثبت‌نام
+# ==================== مراحل ثبت‌نام ====================
+
 GENDER, AGE, PURPOSE, CITY, AGE_MIN, AGE_MAX, INTERESTS, JOB_STATUS, DESCRIPTION, PHOTO, PRIVACY = range(11)
+
+# ==================== منوی اصلی ====================
 
 def main_menu_keyboard():
     keyboard = [
@@ -270,6 +273,8 @@ async def age_max_input(update: Update, context: ContextTypes.DEFAULT_TYPE):
     await show_interests(update, context)
     return INTERESTS
 
+# ==================== علایق ====================
+
 def get_interests_keyboard(selected=None):
     if selected is None:
         selected = []
@@ -327,11 +332,9 @@ async def interests_selection(update: Update, context: ContextTypes.DEFAULT_TYPE
                 "❌ حداقل یک علاقه انتخاب کن!",
                 reply_markup=None
             )
-            # دوباره لیست رو نشون بده
             await show_interests(update, context)
             return INTERESTS
         
-        # برو به مرحله بعد
         await query.edit_message_text(
             "💼 وضعیت شغلی/تحصیلیت چیه؟",
             reply_markup=InlineKeyboardMarkup([
@@ -343,7 +346,6 @@ async def interests_selection(update: Update, context: ContextTypes.DEFAULT_TYPE
         )
         return JOB_STATUS
     
-    # مدیریت انتخاب علاقه
     interest = query.data.replace("interest_", "")
     if interest in context.user_data['interests']:
         context.user_data['interests'].remove(interest)
@@ -357,9 +359,10 @@ async def interests_selection(update: Update, context: ContextTypes.DEFAULT_TYPE
             return INTERESTS
         context.user_data['interests'].append(interest)
     
-    # نمایش مجدد لیست
     await show_interests(update, context)
     return INTERESTS
+
+# ==================== وضعیت شغلی ====================
 
 async def job_status_selection(update: Update, context: ContextTypes.DEFAULT_TYPE):
     query = update.callback_query
@@ -389,7 +392,7 @@ async def description_input(update: Update, context: ContextTypes.DEFAULT_TYPE):
         return DESCRIPTION
     context.user_data['description'] = text
     
-    # مرحله عکس
+    # مرحله عکس - اینجا مهمه که درست کار کنه
     await update.message.reply_text(
         "📸 حالا عکس پروفایل خودت رو بفرست.\n\n"
         "این عکس وقتی کسی درخواست عکس بده، براش ارسال میشه.\n"
@@ -406,8 +409,7 @@ async def description_skip(update: Update, context: ContextTypes.DEFAULT_TYPE):
     await query.answer()
     context.user_data['description'] = ""
     
-    # مرحله عکس
-    await query.edit_message_text(
+    await update.callback_query.edit_message_text(
         "📸 حالا عکس پروفایل خودت رو بفرست.\n\n"
         "این عکس وقتی کسی درخواست عکس بده، براش ارسال میشه.\n"
         "اگه عکس نفرستی، عکس پروفایل تلگرامت استفاده میشه.\n\n"
@@ -417,6 +419,8 @@ async def description_skip(update: Update, context: ContextTypes.DEFAULT_TYPE):
         ])
     )
     return PHOTO
+
+# ==================== عکس ====================
 
 async def handle_photo_upload(update: Update, context: ContextTypes.DEFAULT_TYPE):
     if update.message.photo:
@@ -453,8 +457,11 @@ async def photo_done(update: Update, context: ContextTypes.DEFAULT_TYPE):
     query = update.callback_query
     await query.answer()
     
+    # عکس قبلاً تو handle_photo_upload ذخیره شده
     await show_privacy_settings(update, context)
     return PRIVACY
+
+# ==================== حریم خصوصی ====================
 
 async def show_privacy_settings(update: Update, context: ContextTypes.DEFAULT_TYPE):
     if 'privacy' not in context.user_data:
@@ -571,7 +578,7 @@ async def finish_registration(update: Update, context: ContextTypes.DEFAULT_TYPE
         )
     return ConversationHandler.END
 
-# ==================== منوی اصلی ====================
+# ==================== جستجو ====================
 
 async def search(update: Update, context: ContextTypes.DEFAULT_TYPE):
     query = update.callback_query
@@ -1249,13 +1256,11 @@ async def update_profile_field(update: Update, context: ContextTypes.DEFAULT_TYP
                 return
             context.user_data['editing_interests'].append(interest)
         
-        # نمایش مجدد
         await edit_profile_field(update, context)
     
     elif data == "interests_done":
         if not context.user_data.get('editing_interests', []):
             await query.edit_message_text("❌ حداقل یک علاقه انتخاب کن!", reply_markup=None)
-            # نمایش مجدد
             await edit_profile_field(update, context)
             return
         
@@ -1503,6 +1508,8 @@ def main():
     
     application = Application.builder().token(TOKEN).build()
     
+    # ============ همه هندلرها ============
+    
     conv_handler = ConversationHandler(
         entry_points=[CommandHandler('start', start)],
         states={
@@ -1566,8 +1573,19 @@ def main():
     # حریم خصوصی
     application.add_handler(CallbackQueryHandler(privacy_toggle, pattern='^privacy_toggle_(age|city|change_visibility)$'))
     
-    logger.info("Bot started! Press Ctrl+C to stop.")
-    application.run_polling(allowed_updates=Update.ALL_TYPES)
+    # ============ اجرا با Webhook ============
+    
+    port = int(os.environ.get('PORT', 10000))
+    webhook_url = f"https://{os.environ.get('RENDER_EXTERNAL_HOSTNAME')}/webhook"
+    
+    logger.info(f"Starting webhook on port {port} with URL: {webhook_url}")
+    
+    application.run_webhook(
+        listen="0.0.0.0",
+        port=port,
+        url_path=TOKEN,
+        webhook_url=webhook_url
+    )
 
 if __name__ == '__main__':
     main()
