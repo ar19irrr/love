@@ -84,7 +84,7 @@ def init_db():
         created_at TIMESTAMP
     )''')
     
-    # ============ ایندکس‌ها برای سرعت ============
+    # ایندکس‌ها برای سرعت
     c.execute("CREATE INDEX IF NOT EXISTS idx_users_age ON users(age)")
     c.execute("CREATE INDEX IF NOT EXISTS idx_users_purpose ON users(purpose)")
     c.execute("CREATE INDEX IF NOT EXISTS idx_users_city ON users(city)")
@@ -877,24 +877,55 @@ async def handle_request(update: Update, context: ContextTypes.DEFAULT_TYPE):
         conn.commit()
         conn.close()
         
+        # ارسال پیام تذکر به هر دو طرف
+        chat_rules = (
+            "📋 **قوانین چت در بات هم‌نوا**\n\n"
+            "🔒 **حریم خصوصی:**\n"
+            "• تا زمانی که به فرد مقابل اطمینان کامل پیدا نکردید، از به اشتراک گذاشتن شماره تماس، آیدی تلگرام و سایر اطلاعات شخصی خودداری کنید.\n"
+            "• لطفاً در چت از ذکر نام کامل، آدرس محل سکونت و اطلاعات کاری خود بپرهیزید.\n\n"
+            "🤝 **ادب و احترام:**\n"
+            "• از هرگونه فحاشی، توهین و بی‌ادبی در چت خودداری کنید.\n"
+            "• با احترام و ادب با طرف مقابل صحبت کنید.\n\n"
+            "🚫 **مزاحمت و آزار:**\n"
+            "• در صورت مشاهده هرگونه رفتار نامناسب، مزاحمت، اسپم یا فحاشی، از گزینه **ریپورت و بلاک** استفاده کنید.\n"
+            "• گزارش‌های شما به ما کمک می‌کند تا محیطی امن برای همه کاربران فراهم کنیم.\n\n"
+            "💡 **نکات مهم:**\n"
+            "• این چت تا ۳ روز دیگر منقضی می‌شود.\n"
+            "• در صورت نیاز می‌توانید چت را بسته یا طرف مقابل را بلاک کنید.\n"
+            "• لطفاً با دید باز و بدون پیش‌داوری وارد چت شوید.\n\n"
+            "✨ امیدواریم لحظات خوبی را در کنار هم تجربه کنید. ✨"
+        )
+        
+        # ارسال قوانین به هر دو طرف
         try:
             await context.bot.send_message(
                 user_id,
-                f"🎉 طرف مقابل درخواست شما رو قبول کرد!\n"
-                f"حالا می‌تونید با هم چت کنید.",
+                chat_rules,
+                parse_mode='Markdown',
                 reply_markup=InlineKeyboardMarkup([
                     [InlineKeyboardButton("💬 شروع چت", callback_data=f"chat_{chat_id}")]
                 ])
             )
         except Exception as e:
-            logger.error(f"Error notifying requester: {e}")
+            logger.error(f"Error sending rules to user {user_id}: {e}")
+        
+        try:
+            await context.bot.send_message(
+                current_user,
+                chat_rules,
+                parse_mode='Markdown',
+                reply_markup=InlineKeyboardMarkup([
+                    [InlineKeyboardButton("💬 شروع چت", callback_data=f"chat_{chat_id}")]
+                ])
+            )
+        except Exception as e:
+            logger.error(f"Error sending rules to user {current_user}: {e}")
         
         await query.edit_message_text(
-            "🎉 هورا! شما همدیگرو پسندیدین!\n"
-            "چت شما فعال شد.",
-            reply_markup=InlineKeyboardMarkup([
-                [InlineKeyboardButton("💬 شروع چت", callback_data=f"chat_{chat_id}")]
-            ])
+            "🎉 هورا! شما همدیگرو پسندیدین!\n\n"
+            "📋 یک پیام حاوی قوانین چت برای شما ارسال شد.\n"
+            "لطفاً قبل از شروع چت، آن را با دقت مطالعه کنید.",
+            reply_markup=main_menu_keyboard()
         )
     
     elif action == "reject":
@@ -979,7 +1010,6 @@ async def start_chat(update: Update, context: ContextTypes.DEFAULT_TYPE):
         pass
 
 async def handle_chat_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    # چک کن کاربر توی چت هست
     if 'active_chat' not in context.user_data:
         await update.message.reply_text(
             "❌ شما در هیچ چتی نیستی!\n"
@@ -992,7 +1022,6 @@ async def handle_chat_message(update: Update, context: ContextTypes.DEFAULT_TYPE
     sender_id = update.effective_user.id
     partner_id = context.user_data['chat_partner']
     
-    # چک کن چت فعاله
     conn = sqlite3.connect('matchbot.db')
     c = conn.cursor()
     c.execute("SELECT is_active, blocked_by FROM chats WHERE id=?", (chat_id,))
@@ -1011,7 +1040,6 @@ async def handle_chat_message(update: Update, context: ContextTypes.DEFAULT_TYPE
         context.user_data.pop('chat_partner', None)
         return
     
-    # تشخیص نوع پیام
     message_type = "text"
     message_text = ""
     file_id = None
@@ -1047,7 +1075,6 @@ async def handle_chat_message(update: Update, context: ContextTypes.DEFAULT_TYPE
         await update.message.reply_text("❌ این نوع پیام پشتیبانی نمی‌شه!")
         return
     
-    # ذخیره پیام
     conn = sqlite3.connect('matchbot.db')
     c = conn.cursor()
     c.execute("""
@@ -1057,44 +1084,26 @@ async def handle_chat_message(update: Update, context: ContextTypes.DEFAULT_TYPE
     conn.commit()
     conn.close()
     
-    # ======== اینجا مشکل بود ========
-    # ارسال به طرف مقابل (نه به خودش!)
     try:
         if message_type == "text":
-            await context.bot.send_message(
-                partner_id, 
-                f"📩 پیام از طرف مقابل:\n\n{message_text}"
-            )
+            await context.bot.send_message(partner_id, f"📩 پیام جدید:\n\n{message_text}")
         elif message_type == "photo":
-            await context.bot.send_photo(
-                partner_id, 
-                file_id, 
-                caption="📸 عکس جدید"
-            )
+            await context.bot.send_photo(partner_id, file_id, caption="📸 عکس جدید")
         elif message_type == "sticker":
             await context.bot.send_sticker(partner_id, file_id)
         elif message_type == "gif":
-            await context.bot.send_animation(
-                partner_id, 
-                file_id, 
-                caption="🎬 گیف جدید"
-            )
+            await context.bot.send_animation(partner_id, file_id, caption="🎬 گیف جدید")
         elif message_type == "video":
-            await context.bot.send_video(
-                partner_id, 
-                file_id, 
-                caption="🎥 ویدیو جدید"
-            )
+            await context.bot.send_video(partner_id, file_id, caption="🎥 ویدیو جدید")
         elif message_type == "voice":
             await context.bot.send_voice(partner_id, file_id)
         elif message_type == "audio":
             await context.bot.send_audio(partner_id, file_id)
         
-        # فقط یک تیک سبز به فرستنده نشون بده
-        await context.bot.send_message(partner_id, ...)("✅")
+        await update.message.reply_text("✅")
     except Exception as e:
         logger.error(f"Error sending message: {e}")
-        await context.bot.send_message(partner_id, ...)("❌ ارسال ناموفق!")
+        await update.message.reply_text("❌ ارسال ناموفق!")
 
 async def request_photo(update: Update, context: ContextTypes.DEFAULT_TYPE):
     query = update.callback_query
@@ -1197,7 +1206,8 @@ async def block_reason(update: Update, context: ContextTypes.DEFAULT_TYPE):
     try:
         await context.bot.send_message(
             user_id,
-            f"🚫 شما توسط یک کاربر بلاک شدید!\nدلیل: {reason_text}",
+            f"🚫 شما توسط یک کاربر بلاک شدید!\nدلیل: {reason_text}\n\n"
+            "لطفاً در رفتار خودت تجدید نظر کن.",
             reply_markup=main_menu_keyboard()
         )
     except:
@@ -1207,7 +1217,8 @@ async def block_reason(update: Update, context: ContextTypes.DEFAULT_TYPE):
     context.user_data.pop('chat_partner', None)
     
     await query.edit_message_text(
-        f"✅ کاربر با موفقیت بلاک شد!\nدلیل: {reason_text}",
+        f"✅ کاربر با موفقیت بلاک شد!\nدلیل: {reason_text}\n\n"
+        "از اینکه به ما در حفظ امنیت کمک کردی متشکریم.",
         reply_markup=main_menu_keyboard()
     )
 
@@ -1597,18 +1608,18 @@ async def help_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
     
     await query.edit_message_text(
         "ℹ️ راهنمای استفاده از بات هم‌نوا:\n\n"
-        "🔍 جستجو: پیدا کردن افراد مناسب بر اساس مشخصات شما\n"
-        "📝 ویرایش پروفایل: تغییر اطلاعات ثبت‌نامی\n"
-        "📋 درخواست‌های من: مشاهده درخواست‌های دریافتی\n"
-        "🔒 حریم خصوصی: تنظیمات نمایش اطلاعات شما\n"
-        "📊 آمار: مشاهده آمار فعالیت شما\n"
-        "🔄 ریست: ریست کردن ربات (بدون پاک کردن اطلاعات)\n\n"
-        "💡 نکات مهم:\n"
-        "- هر چت ۳ روز اعتبار داره\n"
-        "- حداکثر ۳ چت همزمان فعال میتونی داشته باشی\n"
-        "- افراد رد شده تا ۱ هفته دوباره نمایش داده نمیشن\n"
-        "- برای تغییر اطلاعات از بخش ویرایش پروفایل استفاده کن\n"
-        "- عکس پروفایل رو میتونی در مرحله ثبت‌نام یا ویرایش پروفایل آپلود کنی",
+        "🔍 **جستجو:** پیدا کردن افراد مناسب بر اساس مشخصات شما\n"
+        "📝 **ویرایش پروفایل:** تغییر اطلاعات ثبت‌نامی\n"
+        "📋 **درخواست‌های من:** مشاهده درخواست‌های دریافتی\n"
+        "🔒 **حریم خصوصی:** تنظیمات نمایش اطلاعات شما\n"
+        "📊 **آمار:** مشاهده آمار فعالیت شما\n"
+        "🔄 **ریست:** ریست کردن ربات (بدون پاک کردن اطلاعات)\n\n"
+        "💡 **نکات مهم:**\n"
+        "• هر چت ۳ روز اعتبار داره\n"
+        "• حداکثر ۳ چت همزمان فعال میتونی داشته باشی\n"
+        "• افراد رد شده تا ۱ هفته دوباره نمایش داده نمیشن\n"
+        "• برای تغییر اطلاعات از بخش ویرایش پروفایل استفاده کن\n"
+        "• عکس پروفایل رو میتونی در مرحله ثبت‌نام یا ویرایش پروفایل آپلود کنی",
         reply_markup=main_menu_keyboard()
     )
 
@@ -1689,6 +1700,9 @@ def main():
     application.add_handler(MessageHandler(filters.PHOTO, handle_chat_message))
     application.add_handler(MessageHandler(filters.Sticker.ALL, handle_chat_message))
     application.add_handler(MessageHandler(filters.ANIMATION, handle_chat_message))
+    application.add_handler(MessageHandler(filters.VIDEO, handle_chat_message))
+    application.add_handler(MessageHandler(filters.VOICE, handle_chat_message))
+    application.add_handler(MessageHandler(filters.AUDIO, handle_chat_message))
     
     application.add_handler(CallbackQueryHandler(privacy_toggle, pattern='^privacy_toggle_(age|city|change_visibility)$'))
     
