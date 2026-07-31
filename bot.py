@@ -152,14 +152,15 @@ def main_menu_keyboard():
     ]
     return InlineKeyboardMarkup(keyboard)
 
-# شروع
+# شروع - بررسی ثبت‌نام قبلی
 async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
     user_id = update.effective_user.id
     user = get_user(user_id)
     
     context.user_data.clear()
     
-    if user and user[17]:
+    # اگر کاربر قبلاً ثبت‌نام کرده، مستقیم به منو بره
+    if user and user[17]:  # is_setup_complete = 1
         await update.message.reply_text(
             f"🌟 به بات هم‌نوا خوش اومدی {update.effective_user.first_name}!\n\n"
             "از منوی زیر استفاده کن:",
@@ -167,6 +168,7 @@ async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
         )
         return ConversationHandler.END
     
+    # شروع ثبت‌نام برای کاربر جدید
     await update.message.reply_text(
         "🌟 به بات هم‌نوا خوش اومدی!\n\n"
         "بیا اول با هم آشنا بشیم... 🎉\n\n"
@@ -178,6 +180,8 @@ async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
         ])
     )
     return GENDER
+
+# ============== مراحل ثبت‌نام ==============
 
 async def gender_selection(update: Update, context: ContextTypes.DEFAULT_TYPE):
     query = update.callback_query
@@ -453,7 +457,6 @@ async def privacy_selection(update: Update, context: ContextTypes.DEFAULT_TYPE):
         await show_privacy_settings(update, context)
     
     elif query.data == "change_visibility":
-        # چرخش بین گزینه‌ها
         visibility_options = ['all', 'same_city', 'none']
         current = context.user_data['privacy']['visibility']
         next_index = (visibility_options.index(current) + 1) % len(visibility_options)
@@ -490,7 +493,7 @@ async def privacy_selection(update: Update, context: ContextTypes.DEFAULT_TYPE):
         )
         return ConversationHandler.END
 
-# ==================== منوی اصلی ====================
+# ============== منوی اصلی ==============
 
 # جستجو
 async def search(update: Update, context: ContextTypes.DEFAULT_TYPE):
@@ -566,23 +569,18 @@ async def search(update: Update, context: ContextTypes.DEFAULT_TYPE):
     await show_candidate(update, context)
 
 async def show_candidate(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    if update.callback_query:
-        query = update.callback_query
-        await query.answer()
-        message_func = query.edit_message_text
-    else:
-        message_func = update.message.reply_text
+    query = update.callback_query
+    await query.answer()
     
     candidates = context.user_data.get('candidates', [])
     index = context.user_data.get('candidate_index', 0)
     
     if index >= len(candidates):
-        if update.callback_query:
-            await query.edit_message_text(
-                "🎯 جستجو به پایان رسید!\n"
-                "می‌تونی دوباره جستجو کنی.",
-                reply_markup=main_menu_keyboard()
-            )
+        await query.edit_message_text(
+            "🎯 جستجو به پایان رسید!\n"
+            "می‌تونی دوباره جستجو کنی.",
+            reply_markup=main_menu_keyboard()
+        )
         return
     
     candidate = candidates[index]
@@ -602,16 +600,10 @@ async def show_candidate(update: Update, context: ContextTypes.DEFAULT_TYPE):
         [InlineKeyboardButton("⏩ بعدی", callback_data="next_candidate")]
     ]
     
-    if update.callback_query:
-        await query.edit_message_text(
-            message,
-            reply_markup=InlineKeyboardMarkup(keyboard)
-        )
-    else:
-        await update.message.reply_text(
-            message,
-            reply_markup=InlineKeyboardMarkup(keyboard)
-        )
+    await query.edit_message_text(
+        message,
+        reply_markup=InlineKeyboardMarkup(keyboard)
+    )
 
 async def candidate_action(update: Update, context: ContextTypes.DEFAULT_TYPE):
     query = update.callback_query
@@ -622,11 +614,9 @@ async def candidate_action(update: Update, context: ContextTypes.DEFAULT_TYPE):
     user_id = update.effective_user.id
     
     if action == "like":
-        # ثبت درخواست
         conn = sqlite3.connect('matchbot.db')
         c = conn.cursor()
         
-        # چک کن قبلاً درخواست نداده
         c.execute("SELECT * FROM requests WHERE from_user=? AND to_user=? AND status='pending'", (user_id, target_id))
         if not c.fetchone():
             c.execute("""
@@ -637,7 +627,6 @@ async def candidate_action(update: Update, context: ContextTypes.DEFAULT_TYPE):
         
         conn.close()
         
-        # اطلاع به طرف مقابل
         try:
             target_user = get_user_dict(target_id)
             if target_user:
@@ -660,7 +649,6 @@ async def candidate_action(update: Update, context: ContextTypes.DEFAULT_TYPE):
         )
     
     elif action == "dislike":
-        # ثبت در ردها
         conn = sqlite3.connect('matchbot.db')
         c = conn.cursor()
         c.execute("""
@@ -675,7 +663,6 @@ async def candidate_action(update: Update, context: ContextTypes.DEFAULT_TYPE):
             reply_markup=None
         )
         
-        # رفتن به کاندیدای بعدی
         context.user_data['candidate_index'] += 1
         await show_candidate(update, context)
     
@@ -741,13 +728,11 @@ async def handle_request(update: Update, context: ContextTypes.DEFAULT_TYPE):
     c = conn.cursor()
     
     if action == "accept_request":
-        # بروزرسانی وضعیت درخواست
         c.execute("""
             UPDATE requests SET status='accepted' 
             WHERE from_user=? AND to_user=? AND status='pending'
         """, (user_id, current_user))
         
-        # ایجاد چت جدید
         c.execute("""
             INSERT INTO chats (user1, user2, match_date, expiry_date)
             VALUES (?, ?, ?, ?)
@@ -756,7 +741,6 @@ async def handle_request(update: Update, context: ContextTypes.DEFAULT_TYPE):
         chat_id = c.lastrowid
         conn.commit()
         
-        # اطلاع به هر دو طرف
         await context.bot.send_message(
             user_id,
             f"🎉 طرف مقابل درخواست شما رو قبول کرد!\n"
@@ -788,7 +772,7 @@ async def handle_request(update: Update, context: ContextTypes.DEFAULT_TYPE):
     
     conn.close()
 
-# ==================== چت ====================
+# ============== چت ==============
 
 async def start_chat(update: Update, context: ContextTypes.DEFAULT_TYPE):
     query = update.callback_query
@@ -839,7 +823,6 @@ async def handle_chat_message(update: Update, context: ContextTypes.DEFAULT_TYPE
     sender_id = update.effective_user.id
     text = update.message.text
     
-    # ذخیره پیام
     conn = sqlite3.connect('matchbot.db')
     c = conn.cursor()
     c.execute("""
@@ -849,7 +832,6 @@ async def handle_chat_message(update: Update, context: ContextTypes.DEFAULT_TYPE
     conn.commit()
     conn.close()
     
-    # ارسال به طرف مقابل
     partner_id = context.user_data['chat_partner']
     try:
         await context.bot.send_message(
@@ -872,7 +854,6 @@ async def request_photo(update: Update, context: ContextTypes.DEFAULT_TYPE):
     requester_id = update.effective_user.id
     chat_id = context.user_data['active_chat']
     
-    # ثبت درخواست عکس
     conn = sqlite3.connect('matchbot.db')
     c = conn.cursor()
     c.execute("""
@@ -882,11 +863,10 @@ async def request_photo(update: Update, context: ContextTypes.DEFAULT_TYPE):
     conn.commit()
     conn.close()
     
-    # ارسال درخواست به طرف مقابل
     try:
         await context.bot.send_message(
             target_id,
-            f"📸 {requester_id} درخواست عکس شما رو کرده!\n"
+            f"📸 کاربری درخواست عکس شما رو کرده!\n"
             "آیا اجازه می‌دی عکس شما رو ببینه؟",
             reply_markup=InlineKeyboardMarkup([
                 [InlineKeyboardButton("✅ بله", callback_data=f"accept_photo_{requester_id}")],
@@ -906,7 +886,6 @@ async def handle_photo_request(update: Update, context: ContextTypes.DEFAULT_TYP
     target_id = update.effective_user.id
     
     if action == "accept_photo":
-        # دریافت عکس کاربر
         user = get_user_dict(target_id)
         if user and user['photo']:
             try:
@@ -968,7 +947,7 @@ async def block_user(update: Update, context: ContextTypes.DEFAULT_TYPE):
         reply_markup=main_menu_keyboard()
     )
 
-# ==================== ویرایش پروفایل ====================
+# ============== ویرایش پروفایل ==============
 
 async def edit_profile(update: Update, context: ContextTypes.DEFAULT_TYPE):
     query = update.callback_query
@@ -978,6 +957,17 @@ async def edit_profile(update: Update, context: ContextTypes.DEFAULT_TYPE):
     if not user:
         await query.edit_message_text("❌ شما ثبت‌نام نکردی!", reply_markup=main_menu_keyboard())
         return
+    
+    # نمایش اطلاعات فعلی
+    info_text = f"📝 اطلاعات فعلی شما:\n\n"
+    info_text += f"👤 جنسیت: {user['gender']}\n"
+    info_text += f"📅 سن: {user['age']}\n"
+    info_text += f"🎯 هدف: {user['purpose']}\n"
+    info_text += f"🏙️ شهر: {user['city']}\n"
+    info_text += f"🎨 علایق: {', '.join(json.loads(user['interests']) if user['interests'] else [])}\n"
+    info_text += f"💼 وضعیت: {user['job_status']}\n"
+    info_text += f"📝 توضیحات: {user['description'][:30] + '...' if user['description'] and len(user['description']) > 30 else user['description'] or '❌ ندارد'}\n\n"
+    info_text += "کدوم بخش رو می‌خوای ویرایش کنی؟"
     
     keyboard = [
         [InlineKeyboardButton("👤 جنسیت", callback_data="edit_gender"),
@@ -991,7 +981,7 @@ async def edit_profile(update: Update, context: ContextTypes.DEFAULT_TYPE):
     ]
     
     await query.edit_message_text(
-        "📝 چه چیزی رو می‌خوای ویرایش کنی؟",
+        info_text,
         reply_markup=InlineKeyboardMarkup(keyboard)
     )
 
@@ -1015,7 +1005,7 @@ async def edit_profile_field(update: Update, context: ContextTypes.DEFAULT_TYPE)
     
     elif field == "age":
         await query.edit_message_text(
-            "سن جدید رو وارد کن (فقط عدد):",
+            f"سن فعلی: {user['age']}\n\nسن جدید رو وارد کن (فقط عدد):",
             reply_markup=InlineKeyboardMarkup([
                 [InlineKeyboardButton("🔙 برگشت", callback_data="edit_profile")]
             ])
@@ -1024,7 +1014,7 @@ async def edit_profile_field(update: Update, context: ContextTypes.DEFAULT_TYPE)
     
     elif field == "purpose":
         await query.edit_message_text(
-            "هدف جدید رو انتخاب کن:",
+            f"هدف فعلی: {user['purpose']}\n\nهدف جدید رو انتخاب کن:",
             reply_markup=InlineKeyboardMarkup([
                 [InlineKeyboardButton("💍 ازدواج", callback_data="update_purpose_marriage")],
                 [InlineKeyboardButton("💑 دوستی", callback_data="update_purpose_relationship")],
@@ -1036,7 +1026,7 @@ async def edit_profile_field(update: Update, context: ContextTypes.DEFAULT_TYPE)
     
     elif field == "city":
         await query.edit_message_text(
-            "شهر جدید رو وارد کن:",
+            f"شهر فعلی: {user['city']}\n\nشهر جدید رو وارد کن:",
             reply_markup=InlineKeyboardMarkup([
                 [InlineKeyboardButton("🔙 برگشت", callback_data="edit_profile")]
             ])
@@ -1044,34 +1034,38 @@ async def edit_profile_field(update: Update, context: ContextTypes.DEFAULT_TYPE)
         context.user_data['editing_field'] = 'city'
     
     elif field == "interests":
-        interests = [
-            ["🎬 فیلم", "📚 کتاب", "🎵 موسیقی"],
-            ["🏋️ ورزش", "🍳 آشپزی", "🎮 بازی"],
-            ["🧳 سفر", "🌿 طبیعت", "✏️ نقاشی"],
-            ["💻 تکنولوژی", "🧘 مدیتیشن", "🐱 حیوانات"]
+        interests_list = [
+            "🎬 فیلم", "📚 کتاب", "🎵 موسیقی",
+            "🏋️ ورزش", "🍳 آشپزی", "🎮 بازی",
+            "🧳 سفر", "🌿 طبیعت", "✏️ نقاشی",
+            "💻 تکنولوژی", "🧘 مدیتیشن", "🐱 حیوانات"
         ]
         
         current_interests = json.loads(user['interests']) if user['interests'] else []
         keyboard = []
-        for row in interests:
-            row_buttons = []
-            for item in row:
+        
+        # نمایش علایق در ردیف‌های ۳ تایی
+        for i in range(0, len(interests_list), 3):
+            row = []
+            for item in interests_list[i:i+3]:
                 icon = "✅" if item in current_interests else "⬜"
-                row_buttons.append(InlineKeyboardButton(f"{icon} {item}", callback_data=f"update_interest_{item}"))
-            keyboard.append(row_buttons)
-        keyboard.append([InlineKeyboardButton("✅ تایید", callback_data="update_interests_done")])
+                row.append(InlineKeyboardButton(f"{icon} {item}", callback_data=f"update_interest_{item}"))
+            keyboard.append(row)
+        
+        keyboard.append([InlineKeyboardButton("💾 ذخیره تغییرات", callback_data="update_interests_done")])
         keyboard.append([InlineKeyboardButton("🔙 برگشت", callback_data="edit_profile")])
         
         context.user_data['editing_interests'] = current_interests
         
         await query.edit_message_text(
-            "علایق خودت رو انتخاب کن (حداکثر ۵ تا):",
+            f"علایق فعلی: {', '.join(current_interests) if current_interests else '❌ ندارد'}\n\n"
+            "روی هر گزینه بزن تا اضافه یا حذف بشه (حداکثر ۵ تا):",
             reply_markup=InlineKeyboardMarkup(keyboard)
         )
     
     elif field == "job":
         await query.edit_message_text(
-            "وضعیت شغلی جدید رو انتخاب کن:",
+            f"وضعیت فعلی: {user['job_status']}\n\nوضعیت جدید رو انتخاب کن:",
             reply_markup=InlineKeyboardMarkup([
                 [InlineKeyboardButton("🎓 دانشجو", callback_data="update_job_student")],
                 [InlineKeyboardButton("💼 شاغل", callback_data="update_job_employed")],
@@ -1083,6 +1077,7 @@ async def edit_profile_field(update: Update, context: ContextTypes.DEFAULT_TYPE)
     
     elif field == "description":
         await query.edit_message_text(
+            f"توضیحات فعلی: {user['description'] if user['description'] else '❌ ندارد'}\n\n"
             "توضیحات جدید رو وارد کن (حداکثر ۲۰۰ کاراکتر):",
             reply_markup=InlineKeyboardMarkup([
                 [InlineKeyboardButton("🔙 برگشت", callback_data="edit_profile")]
@@ -1169,7 +1164,7 @@ async def handle_profile_text_input(update: Update, context: ContextTypes.DEFAUL
     
     context.user_data.pop('editing_field', None)
 
-# ==================== حریم خصوصی ====================
+# ============== حریم خصوصی ==============
 
 async def privacy_settings(update: Update, context: ContextTypes.DEFAULT_TYPE):
     query = update.callback_query
@@ -1180,7 +1175,6 @@ async def privacy_settings(update: Update, context: ContextTypes.DEFAULT_TYPE):
         await query.edit_message_text("❌ شما ثبت‌نام نکردی!", reply_markup=main_menu_keyboard())
         return
     
-    # نمایش وضعیت فعلی
     age_status = "✅" if user['privacy_age'] else "❌"
     city_status = "✅" if user['privacy_city'] else "❌"
     
@@ -1199,6 +1193,10 @@ async def privacy_settings(update: Update, context: ContextTypes.DEFAULT_TYPE):
     
     await query.edit_message_text(
         "🔒 تنظیمات حریم خصوصی:\n\n"
+        f"وضعیت فعلی:\n"
+        f"سن: {'نمایش داده میشه' if user['privacy_age'] else 'مخفی'}\n"
+        f"شهر: {'نمایش داده میشه' if user['privacy_city'] else 'مخفی'}\n"
+        f"نمایش به: {visibility_text}\n\n"
         "✅ = نمایش داده میشه\n"
         "❌ = نمایش داده نمیشه\n\n"
         "روی هر گزینه بزن تا تغییر کنه:",
@@ -1226,10 +1224,9 @@ async def privacy_toggle(update: Update, context: ContextTypes.DEFAULT_TYPE):
         next_index = (visibility_options.index(current) + 1) % len(visibility_options)
         save_user(user_id, {'privacy_visibility': visibility_options[next_index]})
     
-    # نمایش مجدد
     await privacy_settings(update, context)
 
-# ==================== درخواست‌های من ====================
+# ============== درخواست‌های من ==============
 
 async def my_requests(update: Update, context: ContextTypes.DEFAULT_TYPE):
     query = update.callback_query
@@ -1240,7 +1237,6 @@ async def my_requests(update: Update, context: ContextTypes.DEFAULT_TYPE):
     conn = sqlite3.connect('matchbot.db')
     c = conn.cursor()
     
-    # درخواست‌های دریافتی
     c.execute("""
         SELECT from_user, created_at FROM requests 
         WHERE to_user=? AND status='pending'
@@ -1252,7 +1248,7 @@ async def my_requests(update: Update, context: ContextTypes.DEFAULT_TYPE):
     
     if not received:
         await query.edit_message_text(
-            "📋 هیچ درخواستی ندارید!",
+            "📋 هیچ درخواست جدیدی ندارید!",
             reply_markup=main_menu_keyboard()
         )
         return
@@ -1260,12 +1256,14 @@ async def my_requests(update: Update, context: ContextTypes.DEFAULT_TYPE):
     message = "📋 درخواست‌های دریافتی:\n\n"
     keyboard = []
     
-    for req in received[:5]:  # حداکثر ۵ تا
+    for req in received[:5]:
         from_user = get_user_dict(req[0])
         if from_user:
-            message += f"👤 {from_user['age'] if from_user['privacy_age'] else '❌'}\n"
+            message += f"👤 سن: {from_user['age'] if from_user['privacy_age'] else '❌'}\n"
+            message += f"📍 شهر: {from_user['city'] if from_user['privacy_city'] else '❌'}\n"
+            message += f"🎯 هدف: {from_user['purpose']}\n\n"
             keyboard.append([InlineKeyboardButton(
-                f"👀 مشاهده {from_user['age'] if from_user['privacy_age'] else 'کاربر'}",
+                f"👀 مشاهده و پاسخ",
                 callback_data=f"view_requester_{from_user['user_id']}"
             )])
     
@@ -1276,7 +1274,7 @@ async def my_requests(update: Update, context: ContextTypes.DEFAULT_TYPE):
         reply_markup=InlineKeyboardMarkup(keyboard)
     )
 
-# ==================== آمار ====================
+# ============== آمار ==============
 
 async def stats(update: Update, context: ContextTypes.DEFAULT_TYPE):
     query = update.callback_query
@@ -1306,7 +1304,7 @@ async def stats(update: Update, context: ContextTypes.DEFAULT_TYPE):
         reply_markup=main_menu_keyboard()
     )
 
-# ==================== ریست ====================
+# ============== ریست ==============
 
 async def reset_bot(update: Update, context: ContextTypes.DEFAULT_TYPE):
     query = update.callback_query
@@ -1326,7 +1324,7 @@ async def reset_bot(update: Update, context: ContextTypes.DEFAULT_TYPE):
         reply_markup=None
     )
 
-# ==================== راهنما ====================
+# ============== راهنما ==============
 
 async def help_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
     query = update.callback_query
@@ -1334,20 +1332,21 @@ async def help_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
     
     await query.edit_message_text(
         "ℹ️ راهنمای استفاده از بات هم‌نوا:\n\n"
-        "🔍 جستجو: پیدا کردن افراد مناسب\n"
-        "📝 ویرایش پروفایل: تغییر اطلاعات\n"
-        "📋 درخواست‌های من: مشاهده درخواست‌ها\n"
-        "🔒 حریم خصوصی: تنظیمات نمایش اطلاعات\n"
-        "📊 آمار: مشاهده آمار شما\n"
-        "🔄 ریست: ریست کردن ربات\n\n"
-        "💡 نکات:\n"
+        "🔍 جستجو: پیدا کردن افراد مناسب بر اساس مشخصات شما\n"
+        "📝 ویرایش پروفایل: تغییر اطلاعات ثبت‌نامی\n"
+        "📋 درخواست‌های من: مشاهده درخواست‌های دریافتی\n"
+        "🔒 حریم خصوصی: تنظیمات نمایش اطلاعات شما\n"
+        "📊 آمار: مشاهده آمار فعالیت شما\n"
+        "🔄 ریست: ریست کردن ربات (بدون پاک کردن اطلاعات)\n\n"
+        "💡 نکات مهم:\n"
         "- هر چت ۳ روز اعتبار داره\n"
-        "- می‌تونی حداکثر ۳ چت همزمان داشته باشی\n"
-        "- افراد رد شده تا ۱ هفته نمایش داده نمیشن",
+        "- حداکثر ۳ چت همزمان فعال میتونی داشته باشی\n"
+        "- افراد رد شده تا ۱ هفته دوباره نمایش داده نمیشن\n"
+        "- برای تغییر اطلاعات از بخش ویرایش پروفایل استفاده کن",
         reply_markup=main_menu_keyboard()
     )
 
-# ==================== برگشت به منو ====================
+# ============== برگشت به منو ==============
 
 async def back_to_menu(update: Update, context: ContextTypes.DEFAULT_TYPE):
     query = update.callback_query
@@ -1358,7 +1357,7 @@ async def back_to_menu(update: Update, context: ContextTypes.DEFAULT_TYPE):
         reply_markup=main_menu_keyboard()
     )
 
-# ==================== تابع اصلی ====================
+# ============== تابع اصلی ==============
 
 def main():
     init_db()
