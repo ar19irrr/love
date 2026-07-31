@@ -63,7 +63,8 @@ def init_db():
         chat_id INTEGER,
         sender_id INTEGER,
         message_text TEXT,
-        photo_path TEXT,
+        message_type TEXT DEFAULT 'text',
+        file_id TEXT,
         timestamp TIMESTAMP,
         is_read BOOLEAN DEFAULT 0
     )''')
@@ -75,12 +76,11 @@ def init_db():
         PRIMARY KEY (user_id, rejected_user_id)
     )''')
     
-    c.execute('''CREATE TABLE IF NOT EXISTS photo_requests (
+    c.execute('''CREATE TABLE IF NOT EXISTS blocks (
         id INTEGER PRIMARY KEY AUTOINCREMENT,
-        requester_id INTEGER,
-        target_id INTEGER,
-        chat_id INTEGER,
-        status TEXT DEFAULT 'pending',
+        blocker_id INTEGER,
+        blocked_id INTEGER,
+        reason TEXT,
         created_at TIMESTAMP
     )''')
     
@@ -138,6 +138,16 @@ def main_menu_keyboard():
         [InlineKeyboardButton("ℹ️ راهنما", callback_data="help")]
     ]
     return InlineKeyboardMarkup(keyboard)
+
+def chat_keyboard(chat_id, other_user):
+    keyboard = [
+        [InlineKeyboardButton("📸 درخواست عکس", callback_data=f"photo_{other_user}")],
+        [InlineKeyboardButton("🚫 بلاک کردن", callback_data=f"block_{other_user}")],
+        [InlineKeyboardButton("❌ بستن چت", callback_data="close_chat")]
+    ]
+    return InlineKeyboardMarkup(keyboard)
+
+# ==================== شروع و ثبت‌نام ====================
 
 async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
     user_id = update.effective_user.id
@@ -513,16 +523,13 @@ async def privacy_selection(update: Update, context: ContextTypes.DEFAULT_TYPE):
 async def finish_registration(update: Update, context: ContextTypes.DEFAULT_TYPE):
     user_id = update.effective_user.id
     
-    # اگه عکس نفرستاده، از تلگرام بگیر
     if 'photo' not in context.user_data or not context.user_data['photo']:
         try:
             user_photos = await context.bot.get_user_profile_photos(user_id, limit=1)
             if user_photos.total_count > 0:
                 photo_file_id = user_photos.photos[0][-1].file_id
                 context.user_data['photo'] = photo_file_id
-                logger.info(f"Got photo from Telegram profile for user {user_id}")
-        except Exception as e:
-            logger.error(f"Could not get profile photo: {e}")
+        except:
             context.user_data['photo'] = None
     
     user_data = {
@@ -912,7 +919,7 @@ async def handle_request(update: Update, context: ContextTypes.DEFAULT_TYPE):
             reply_markup=main_menu_keyboard()
         )
 
-# ==================== چت ====================
+# ==================== چت کامل ====================
 
 async def start_chat(update: Update, context: ContextTypes.DEFAULT_TYPE):
     query = update.callback_query
@@ -921,7 +928,7 @@ async def start_chat(update: Update, context: ContextTypes.DEFAULT_TYPE):
     try:
         parts = query.data.split('_', 1)
         if len(parts) != 2:
-            await query.edit_message_text("❌ خطا در پردازش! فرمت: chat_123", reply_markup=main_menu_keyboard())
+            await query.edit_message_text("❌ خطا در پردازش!", reply_markup=main_menu_keyboard())
             return
         chat_id = int(parts[1])
     except Exception as e:
@@ -931,7 +938,7 @@ async def start_chat(update: Update, context: ContextTypes.DEFAULT_TYPE):
     
     conn = sqlite3.connect('matchbot.db')
     c = conn.cursor()
-    c.execute("SELECT user1, user2, is_active FROM chats WHERE id=?", (chat_id,))
+    c.execute("SELECT user1, user2, is_active, blocked_by FROM chats WHERE id=?", (chat_id,))
     chat = c.fetchone()
     conn.close()
     
@@ -939,23 +946,34 @@ async def start_chat(update: Update, context: ContextTypes.DEFAULT_TYPE):
         await query.edit_message_text("❌ این چت فعال نیست!", reply_markup=main_menu_keyboard())
         return
     
-    if update.effective_user.id not in [chat[0], chat[1]]:
+    current_user = update.effective_user.id
+    
+    # چک کن کاربر بلاک نشده
+    if chat[3] and chat[3] != current_user:
+        await query.edit_message_text(
+            "🚫 شما توسط طرف مقابل بلاک شده‌اید!",
+            reply_markup=main_menu_keyboard()
+        )
+        return
+    
+    if current_user not in [chat[0], chat[1]]:
         await query.edit_message_text("❌ شما دسترسی به این چت ندارید!", reply_markup=main_menu_keyboard())
         return
     
-    other_user = chat[1] if chat[0] == update.effective_user.id else chat[0]
+    other_user = chat[1] if chat[0] == current_user else chat[0]
     
     context.user_data['active_chat'] = chat_id
     context.user_data['chat_partner'] = other_user
     
+    # ارسال پیام خوش‌آمدگویی چت
     await query.edit_message_text(
-        "💬 چت شروع شد!\n"
-        "پیام خودت رو بفرست...\n\n"
-        "📌 برای بستن چت از دکمه زیر استفاده کن.",
+        "💬 چت شروع شد!\n\n"
+        "📝 می‌تونی پیام، عکس، استیکر و گیف بفرستی.\n"
+        "📌 برای بستن چت یا بلاک کردن از دکمه‌های زیر استفاده کن.",
         reply_markup=InlineKeyboardMarkup([
             [InlineKeyboardButton("📸 درخواست عکس", callback_data=f"photo_{other_user}")],
-            [InlineKeyboardButton("❌ بستن چت", callback_data="close_chat")],
-            [InlineKeyboardButton("🚫 بلاک کردن", callback_data=f"block_{other_user}")]
+            [InlineKeyboardButton("🚫 بلاک کردن", callback_data=f"block_{other_user}")],
+            [InlineKeyboardButton("❌ بستن چت", callback_data="close_chat")]
         ])
     )
 
@@ -970,30 +988,96 @@ async def handle_chat_message(update: Update, context: ContextTypes.DEFAULT_TYPE
     
     chat_id = context.user_data['active_chat']
     sender_id = update.effective_user.id
-    text = update.message.text
+    partner_id = context.user_data['chat_partner']
     
+    # چک کن چت هنوز فعاله
+    conn = sqlite3.connect('matchbot.db')
+    c = conn.cursor()
+    c.execute("SELECT is_active, blocked_by FROM chats WHERE id=?", (chat_id,))
+    chat = c.fetchone()
+    conn.close()
+    
+    if not chat or not chat[0]:
+        await update.message.reply_text(
+            "❌ این چت فعال نیست!",
+            reply_markup=main_menu_keyboard()
+        )
+        context.user_data.pop('active_chat', None)
+        context.user_data.pop('chat_partner', None)
+        return
+    
+    if chat[1] and chat[1] != sender_id:
+        await update.message.reply_text(
+            "🚫 شما توسط طرف مقابل بلاک شده‌اید!",
+            reply_markup=main_menu_keyboard()
+        )
+        context.user_data.pop('active_chat', None)
+        context.user_data.pop('chat_partner', None)
+        return
+    
+    # دریافت محتوا
+    message_type = "text"
+    message_text = ""
+    file_id = None
+    
+    if update.message.text:
+        message_text = update.message.text
+        message_type = "text"
+    elif update.message.photo:
+        message_type = "photo"
+        file_id = update.message.photo[-1].file_id
+        message_text = "📸 عکس"
+    elif update.message.sticker:
+        message_type = "sticker"
+        file_id = update.message.sticker.file_id
+        message_text = "🎨 استیکر"
+    elif update.message.animation:
+        message_type = "gif"
+        file_id = update.message.animation.file_id
+        message_text = "🎬 گیف"
+    else:
+        await update.message.reply_text("❌ این نوع پیام پشتیبانی نمی‌شه!")
+        return
+    
+    # ذخیره پیام
     conn = sqlite3.connect('matchbot.db')
     c = conn.cursor()
     c.execute("""
-        INSERT INTO messages (chat_id, sender_id, message_text, timestamp)
-        VALUES (?, ?, ?, ?)
-    """, (chat_id, sender_id, text, datetime.now()))
+        INSERT INTO messages (chat_id, sender_id, message_text, message_type, file_id, timestamp)
+        VALUES (?, ?, ?, ?, ?, ?)
+    """, (chat_id, sender_id, message_text, message_type, file_id, datetime.now()))
     conn.commit()
     conn.close()
     
-    partner_id = context.user_data['chat_partner']
+    # ارسال به طرف مقابل
     try:
-        await context.bot.send_message(
-            partner_id,
-            f"📩 پیام جدید:\n\n{text}",
-            reply_markup=InlineKeyboardMarkup([
-                [InlineKeyboardButton("💬 پاسخ", callback_data=f"reply_{chat_id}")]
-            ])
-        )
-        await update.message.reply_text("✅ پیام ارسال شد!")
+        if message_type == "text":
+            await context.bot.send_message(
+                partner_id,
+                f"📩 پیام جدید:\n\n{message_text}"
+            )
+        elif message_type == "photo":
+            await context.bot.send_photo(
+                partner_id,
+                file_id,
+                caption="📸 عکس جدید"
+            )
+        elif message_type == "sticker":
+            await context.bot.send_sticker(
+                partner_id,
+                file_id
+            )
+        elif message_type == "gif":
+            await context.bot.send_animation(
+                partner_id,
+                file_id,
+                caption="🎬 گیف جدید"
+            )
+        
+        await update.message.reply_text("✅ ارسال شد!")
     except Exception as e:
         logger.error(f"Error sending message: {e}")
-        await update.message.reply_text("❌ ارسال پیام ناموفق!")
+        await update.message.reply_text("❌ ارسال ناموفق! کاربر آفلاین است.")
 
 async def request_photo(update: Update, context: ContextTypes.DEFAULT_TYPE):
     query = update.callback_query
@@ -1002,7 +1086,7 @@ async def request_photo(update: Update, context: ContextTypes.DEFAULT_TYPE):
     try:
         parts = query.data.split('_', 1)
         if len(parts) != 2:
-            await query.edit_message_text("❌ خطا در پردازش! فرمت: photo_123", reply_markup=main_menu_keyboard())
+            await query.edit_message_text("❌ خطا در پردازش!", reply_markup=main_menu_keyboard())
             return
         target_id = int(parts[1])
     except Exception as e:
@@ -1010,21 +1094,12 @@ async def request_photo(update: Update, context: ContextTypes.DEFAULT_TYPE):
         await query.edit_message_text("❌ خطا در پردازش!", reply_markup=main_menu_keyboard())
         return
     
-    requester_id = update.effective_user.id
-    chat_id = context.user_data.get('active_chat')
-    
-    if not chat_id:
-        await query.edit_message_text("❌ شما در هیچ چتی نیستی!", reply_markup=main_menu_keyboard())
-        return
-    
-    # بررسی عکس کاربر
     user = get_user_dict(target_id)
     
     if user and user['photo_file_id']:
         try:
-            # مستقیم عکس رو بفرست
             await context.bot.send_photo(
-                requester_id,
+                update.effective_user.id,
                 user['photo_file_id'],
                 caption="📸 عکس درخواستی:"
             )
@@ -1035,17 +1110,7 @@ async def request_photo(update: Update, context: ContextTypes.DEFAULT_TYPE):
     else:
         await query.edit_message_text("❌ کاربر مورد نظر عکسی ندارد!")
 
-async def close_chat(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    query = update.callback_query
-    await query.answer()
-    
-    context.user_data.pop('active_chat', None)
-    context.user_data.pop('chat_partner', None)
-    
-    await query.edit_message_text(
-        "✅ چت بسته شد!",
-        reply_markup=main_menu_keyboard()
-    )
+# ==================== بلاک کردن ====================
 
 async def block_user(update: Update, context: ContextTypes.DEFAULT_TYPE):
     query = update.callback_query
@@ -1065,18 +1130,92 @@ async def block_user(update: Update, context: ContextTypes.DEFAULT_TYPE):
     current_user = update.effective_user.id
     chat_id = context.user_data.get('active_chat')
     
+    keyboard = [
+        [InlineKeyboardButton("🔞 فحاشی و بی‌ادبی", callback_data=f"block_reason_abuse_{user_id}")],
+        [InlineKeyboardButton("📱 مزاحمت و اسپم", callback_data=f"block_reason_spam_{user_id}")],
+        [InlineKeyboardButton("🎭 دروغ و کلاهبرداری", callback_data=f"block_reason_fake_{user_id}")],
+        [InlineKeyboardButton("❌ مورد پسندم نبود", callback_data=f"block_reason_not_interested_{user_id}")],
+        [InlineKeyboardButton("🔙 انصراف", callback_data="close_chat")]
+    ]
+    
+    await query.edit_message_text(
+        "🚫 چرا می‌خوای این کاربر رو بلاک کنی؟\n\n"
+        "انتخاب تو به ما کمک میکنه تا محیط امن‌تری داشته باشیم.",
+        reply_markup=InlineKeyboardMarkup(keyboard)
+    )
+
+async def block_reason(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    query = update.callback_query
+    await query.answer()
+    
+    try:
+        parts = query.data.split('_')
+        if len(parts) != 4:
+            await query.edit_message_text("❌ خطا در پردازش!", reply_markup=main_menu_keyboard())
+            return
+        reason = parts[2]  # abuse, spam, fake, not_interested
+        user_id = int(parts[3])
+    except Exception as e:
+        logger.error(f"Error in block_reason: {e}")
+        await query.edit_message_text("❌ خطا در پردازش!", reply_markup=main_menu_keyboard())
+        return
+    
+    current_user = update.effective_user.id
+    chat_id = context.user_data.get('active_chat')
+    
+    # ذخیره بلاک
+    conn = sqlite3.connect('matchbot.db')
+    c = conn.cursor()
+    c.execute("""
+        INSERT INTO blocks (blocker_id, blocked_id, reason, created_at)
+        VALUES (?, ?, ?, ?)
+    """, (current_user, user_id, reason, datetime.now()))
+    
+    # غیرفعال کردن چت
     if chat_id:
-        conn = sqlite3.connect('matchbot.db')
-        c = conn.cursor()
         c.execute("UPDATE chats SET is_active=0, blocked_by=? WHERE id=?", (current_user, chat_id))
-        conn.commit()
-        conn.close()
+    
+    conn.commit()
+    conn.close()
+    
+    reason_text = {
+        "abuse": "فحاشی و بی‌ادبی",
+        "spam": "مزاحمت و اسپم",
+        "fake": "دروغ و کلاهبرداری",
+        "not_interested": "مورد پسندم نبود"
+    }.get(reason, "نامشخص")
+    
+    # اطلاع به طرف مقابل
+    try:
+        await context.bot.send_message(
+            user_id,
+            f"🚫 کاربر شما رو بلاک کرد!\n"
+            f"دلیل: {reason_text}\n\n"
+            "لطفاً در رفتار خودت تجدید نظر کن.",
+            reply_markup=main_menu_keyboard()
+        )
+    except Exception as e:
+        logger.error(f"Error notifying blocked user: {e}")
     
     context.user_data.pop('active_chat', None)
     context.user_data.pop('chat_partner', None)
     
     await query.edit_message_text(
-        f"🚫 کاربر بلاک شد!",
+        f"✅ کاربر با موفقیت بلاک شد!\n"
+        f"دلیل: {reason_text}\n\n"
+        "اگر این کاربر رو دوباره ببینید، به ما گزارش بدید.",
+        reply_markup=main_menu_keyboard()
+    )
+
+async def close_chat(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    query = update.callback_query
+    await query.answer()
+    
+    context.user_data.pop('active_chat', None)
+    context.user_data.pop('chat_partner', None)
+    
+    await query.edit_message_text(
+        "✅ چت بسته شد!",
         reply_markup=main_menu_keyboard()
     )
 
@@ -1554,9 +1693,13 @@ def main():
     # چت
     application.add_handler(CallbackQueryHandler(start_chat, pattern='^chat_'))
     application.add_handler(CallbackQueryHandler(request_photo, pattern='^photo_'))
-    application.add_handler(CallbackQueryHandler(close_chat, pattern='^close_chat$'))
     application.add_handler(CallbackQueryHandler(block_user, pattern='^block_'))
+    application.add_handler(CallbackQueryHandler(block_reason, pattern='^block_reason_'))
+    application.add_handler(CallbackQueryHandler(close_chat, pattern='^close_chat$'))
     application.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, handle_chat_message))
+    application.add_handler(MessageHandler(filters.PHOTO, handle_chat_message))
+    application.add_handler(MessageHandler(filters.Sticker.ALL, handle_chat_message))
+    application.add_handler(MessageHandler(filters.ANIMATION, handle_chat_message))
     
     # حریم خصوصی
     application.add_handler(CallbackQueryHandler(privacy_toggle, pattern='^privacy_toggle_(age|city|change_visibility)$'))
