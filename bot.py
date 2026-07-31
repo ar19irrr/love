@@ -84,9 +84,25 @@ def init_db():
         created_at TIMESTAMP
     )''')
     
+    # ============ ایندکس‌ها برای سرعت ============
+    c.execute("CREATE INDEX IF NOT EXISTS idx_users_age ON users(age)")
+    c.execute("CREATE INDEX IF NOT EXISTS idx_users_purpose ON users(purpose)")
+    c.execute("CREATE INDEX IF NOT EXISTS idx_users_city ON users(city)")
+    c.execute("CREATE INDEX IF NOT EXISTS idx_users_active ON users(is_active)")
+    c.execute("CREATE INDEX IF NOT EXISTS idx_users_complete ON users(is_setup_complete)")
+    c.execute("CREATE INDEX IF NOT EXISTS idx_requests_status ON requests(status)")
+    c.execute("CREATE INDEX IF NOT EXISTS idx_requests_from ON requests(from_user)")
+    c.execute("CREATE INDEX IF NOT EXISTS idx_requests_to ON requests(to_user)")
+    c.execute("CREATE INDEX IF NOT EXISTS idx_chats_active ON chats(is_active)")
+    c.execute("CREATE INDEX IF NOT EXISTS idx_chats_users ON chats(user1, user2)")
+    c.execute("CREATE INDEX IF NOT EXISTS idx_rejected_user ON rejected(user_id)")
+    c.execute("CREATE INDEX IF NOT EXISTS idx_rejected_time ON rejected(rejected_at)")
+    c.execute("CREATE INDEX IF NOT EXISTS idx_messages_chat ON messages(chat_id)")
+    c.execute("CREATE INDEX IF NOT EXISTS idx_messages_time ON messages(timestamp)")
+    
     conn.commit()
     conn.close()
-    logger.info("Database initialized!")
+    logger.info("Database initialized with indexes!")
 
 def get_user(user_id):
     conn = sqlite3.connect('matchbot.db')
@@ -946,7 +962,6 @@ async def start_chat(update: Update, context: ContextTypes.DEFAULT_TYPE):
     context.user_data['active_chat'] = chat_id
     context.user_data['chat_partner'] = other_user
     
-    # ارسال پیام جدید به جای ویرایش
     await query.message.reply_text(
         "💬 چت شروع شد!\n\n"
         "📝 می‌تونی پیام، عکس، استیکر، گیف، ویدیو، ویس و آهنگ بفرستی.\n"
@@ -958,14 +973,12 @@ async def start_chat(update: Update, context: ContextTypes.DEFAULT_TYPE):
         ])
     )
     
-    # پیام قبلی رو حذف کن
     try:
         await query.message.delete()
     except:
         pass
-        
+
 async def handle_chat_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    # چک کن کاربر توی چت هست
     if 'active_chat' not in context.user_data:
         await update.message.reply_text(
             "❌ شما در هیچ چتی نیستی!\n"
@@ -978,7 +991,6 @@ async def handle_chat_message(update: Update, context: ContextTypes.DEFAULT_TYPE
     sender_id = update.effective_user.id
     partner_id = context.user_data['chat_partner']
     
-    # چک کن چت فعاله
     conn = sqlite3.connect('matchbot.db')
     c = conn.cursor()
     c.execute("SELECT is_active, blocked_by FROM chats WHERE id=?", (chat_id,))
@@ -997,7 +1009,6 @@ async def handle_chat_message(update: Update, context: ContextTypes.DEFAULT_TYPE
         context.user_data.pop('chat_partner', None)
         return
     
-    # تشخیص نوع پیام
     message_type = "text"
     message_text = ""
     file_id = None
@@ -1033,7 +1044,6 @@ async def handle_chat_message(update: Update, context: ContextTypes.DEFAULT_TYPE
         await update.message.reply_text("❌ این نوع پیام پشتیبانی نمی‌شه!")
         return
     
-    # ذخیره پیام
     conn = sqlite3.connect('matchbot.db')
     c = conn.cursor()
     c.execute("""
@@ -1043,33 +1053,17 @@ async def handle_chat_message(update: Update, context: ContextTypes.DEFAULT_TYPE
     conn.commit()
     conn.close()
     
-    # ارسال به طرف مقابل
     try:
         if message_type == "text":
-            await context.bot.send_message(
-                partner_id, 
-                f"📩 پیام از طرف مقابل:\n\n{message_text}"
-            )
+            await context.bot.send_message(partner_id, f"📩 پیام جدید:\n\n{message_text}")
         elif message_type == "photo":
-            await context.bot.send_photo(
-                partner_id, 
-                file_id, 
-                caption="📸 عکس جدید"
-            )
+            await context.bot.send_photo(partner_id, file_id, caption="📸 عکس جدید")
         elif message_type == "sticker":
             await context.bot.send_sticker(partner_id, file_id)
         elif message_type == "gif":
-            await context.bot.send_animation(
-                partner_id, 
-                file_id, 
-                caption="🎬 گیف جدید"
-            )
+            await context.bot.send_animation(partner_id, file_id, caption="🎬 گیف جدید")
         elif message_type == "video":
-            await context.bot.send_video(
-                partner_id, 
-                file_id, 
-                caption="🎥 ویدیو جدید"
-            )
+            await context.bot.send_video(partner_id, file_id, caption="🎥 ویدیو جدید")
         elif message_type == "voice":
             await context.bot.send_voice(partner_id, file_id)
         elif message_type == "audio":
@@ -1078,7 +1072,7 @@ async def handle_chat_message(update: Update, context: ContextTypes.DEFAULT_TYPE
         await update.message.reply_text("✅ ارسال شد!")
     except Exception as e:
         logger.error(f"Error sending message: {e}")
-        await update.message.reply_text("❌ ارسال ناموفق! کاربر آفلاین است.")
+        await update.message.reply_text("❌ ارسال ناموفق!")
 
 async def request_photo(update: Update, context: ContextTypes.DEFAULT_TYPE):
     query = update.callback_query
