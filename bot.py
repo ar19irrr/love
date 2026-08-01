@@ -5,6 +5,7 @@ import json
 from datetime import datetime, timedelta
 from telegram import Update, InlineKeyboardButton, InlineKeyboardMarkup
 from telegram.ext import Application, CommandHandler, CallbackQueryHandler, MessageHandler, filters, ContextTypes, ConversationHandler
+from chat_handler import handle_chat_message
 
 TOKEN = os.environ.get('TOKEN')
 PORT = int(os.environ.get('PORT', 10000))
@@ -1702,7 +1703,7 @@ def main():
     
     application.add_handler(conv_handler)
     
-    # ============ منوی اصلی ============
+    # منوی اصلی
     application.add_handler(CallbackQueryHandler(search, pattern='^search$'))
     application.add_handler(CallbackQueryHandler(edit_profile, pattern='^edit_profile$'))
     application.add_handler(CallbackQueryHandler(my_requests, pattern='^my_requests$'))
@@ -1712,36 +1713,35 @@ def main():
     application.add_handler(CallbackQueryHandler(help_command, pattern='^help$'))
     application.add_handler(CallbackQueryHandler(back_to_menu, pattern='^back_to_menu$'))
     
-    # ============ ویرایش پروفایل ============
+    # ویرایش پروفایل
     application.add_handler(CallbackQueryHandler(edit_profile_field, pattern='^edit_(gender|age|purpose|city|interests|job|description|photo)$'))
     application.add_handler(CallbackQueryHandler(update_profile_field, pattern='^update_(gender_|purpose_|job_|interest_|interests_done)'))
     application.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, handle_profile_text_input))
     application.add_handler(MessageHandler(filters.PHOTO, handle_profile_text_input))
     
-    # ============ جستجو ============
+    # جستجو
     application.add_handler(CallbackQueryHandler(candidate_action, pattern='^(like|dislike|more)_'))
     application.add_handler(CallbackQueryHandler(show_candidate, pattern='^next_candidate$'))
     application.add_handler(CallbackQueryHandler(back_to_candidate, pattern='^back_'))
     
-    # ============ درخواست‌ها ============
+    # درخواست‌ها
     application.add_handler(CallbackQueryHandler(view_requester, pattern='^view_'))
     application.add_handler(CallbackQueryHandler(handle_request, pattern='^(accept|reject)_'))
     
-    # ============ چت ============
+    # چت
     application.add_handler(CallbackQueryHandler(start_chat, pattern='^chat_'))
     application.add_handler(CallbackQueryHandler(request_photo, pattern='^photo_'))
     application.add_handler(CallbackQueryHandler(block_user, pattern='^block_'))
     application.add_handler(CallbackQueryHandler(block_reason, pattern='^block_reason_'))
     application.add_handler(CallbackQueryHandler(close_chat, pattern='^close_chat$'))
     
-    # ============ پیام‌های چت (با filters.ALL) ============
+    # ============ پیام‌های چت ============
     application.add_handler(MessageHandler(filters.ALL, handle_chat_message))
     
-    # ============ حریم خصوصی ============
+    # حریم خصوصی
     application.add_handler(CallbackQueryHandler(privacy_toggle, pattern='^privacy_toggle_(age|city|change_visibility)$'))
     
-    # ============ اجرا با Polling ============
+    # ============ اجرا ============
     logger.info("Bot started with Polling!")
     application.run_polling(allowed_updates=Update.ALL_TYPES)
-if __name__ == '__main__':
     main()
