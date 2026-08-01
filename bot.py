@@ -1015,9 +1015,10 @@ async def test_text(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
 # ============ هندلر اصلی چت ============
 async def handle_chat_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    logger.info(f"📩 handle_chat_message called! user={update.effective_user.id}")
+    logger.info(f"📩 handle_chat_message STARTED! user={update.effective_user.id}")
     
     if 'active_chat' not in context.user_data:
+        logger.warning(f"❌ No active chat for user {update.effective_user.id}")
         await update.message.reply_text("❌ شما در هیچ چتی نیستی!", reply_markup=main_menu_keyboard())
         return
     
@@ -1079,9 +1080,10 @@ async def handle_chat_message(update: Update, context: ContextTypes.DEFAULT_TYPE
             
         else:
             await update.message.reply_text("❌ این نوع پیام پشتیبانی نمی‌شه!")
+            logger.warning(f"❌ Unsupported message type from {sender_id}")
             
     except Exception as e:
-        logger.error(f"❌ Error: {e}")
+        logger.error(f"❌ Error sending to {partner_id}: {e}")
         await update.message.reply_text(f"❌ ارسال ناموفق!")
 
 async def request_photo(update: Update, context: ContextTypes.DEFAULT_TYPE):
@@ -1676,14 +1678,16 @@ def main():
     application.add_handler(CallbackQueryHandler(block_reason, pattern='^block_reason_'))
     application.add_handler(CallbackQueryHandler(close_chat, pattern='^close_chat$'))
     
-    # ============ همه چیز با filters.ALL ============
-    application.add_handler(MessageHandler(filters.ALL, test_text))
+    # ============ اول handle_chat_message ============
     application.add_handler(MessageHandler(filters.ALL, handle_chat_message))
+    
+    # ============ بعد test_text برای دیباگ ============
+    application.add_handler(MessageHandler(filters.ALL, test_text))
     
     application.add_handler(CallbackQueryHandler(privacy_toggle, pattern='^privacy_toggle_(age|city|change_visibility)$'))
     
     logger.info("Bot started with Polling!")
     application.run_polling(allowed_updates=Update.ALL_TYPES)
-
+    
 if __name__ == '__main__':
     main()
