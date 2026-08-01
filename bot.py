@@ -1734,7 +1734,7 @@ def main():
     application.add_handler(CallbackQueryHandler(block_reason, pattern='^block_reason_'))
     application.add_handler(CallbackQueryHandler(close_chat, pattern='^close_chat$'))
     
-    # ============ همه نوع پیام برای چت ============
+    # همه نوع پیام برای چت
     application.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, handle_chat_message))
     application.add_handler(MessageHandler(filters.PHOTO, handle_chat_message))
     application.add_handler(MessageHandler(filters.Sticker.ALL, handle_chat_message))
