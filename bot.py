@@ -1678,17 +1678,10 @@ def main():
     
     application.add_handler(CallbackQueryHandler(privacy_toggle, pattern='^privacy_toggle_(age|city|change_visibility)$'))
     
-    # ============ اجرا با Webhook (برای Render) ============
-    webhook_url = f"https://{os.environ.get('RENDER_EXTERNAL_HOSTNAME')}/webhook"
+    # ============ اجرا با Polling ============
+logger.info("Bot started with Polling!")
+application.run_polling(allowed_updates=Update.ALL_TYPES)
     
-    logger.info(f"Starting webhook on port {PORT} with URL: {webhook_url}")
-    
-    application.run_webhook(
-        listen="0.0.0.0",
-        port=PORT,
-        url_path=TOKEN,
-        webhook_url=webhook_url
-    )
 
 if __name__ == '__main__':
     main()
