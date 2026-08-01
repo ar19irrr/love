@@ -7,6 +7,7 @@ from telegram import Update, InlineKeyboardButton, InlineKeyboardMarkup
 from telegram.ext import Application, CommandHandler, CallbackQueryHandler, MessageHandler, filters, ContextTypes, ConversationHandler
 
 TOKEN = os.environ.get('TOKEN', "YOUR_BOT_TOKEN_HERE")
+PORT = int(os.environ.get('PORT', 10000))
 
 logging.basicConfig(
     format='%(asctime)s - %(name)s - %(levelname)s - %(message)s',
@@ -1008,12 +1009,6 @@ async def start_chat(update: Update, context: ContextTypes.DEFAULT_TYPE):
     except:
         pass
 
-# ============ تست برای تشخیص همه چیز ============
-async def test_text(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    logger.info(f"🧪 TEST: user={update.effective_user.id}, text={update.message.text if update.message.text else 'NO TEXT'}, photo={bool(update.message.photo)}, sticker={bool(update.message.sticker)}")
-    await update.message.reply_text(f"📩 دریافت شد: {update.message.text if update.message.text else 'چیزی غیر از متن'}")
-
-# ============ هندلر اصلی چت ============
 async def handle_chat_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
     logger.info(f"📩 handle_chat_message STARTED! user={update.effective_user.id}")
     
@@ -1678,16 +1673,22 @@ def main():
     application.add_handler(CallbackQueryHandler(block_reason, pattern='^block_reason_'))
     application.add_handler(CallbackQueryHandler(close_chat, pattern='^close_chat$'))
     
-    # ============ اول handle_chat_message ============
+    # ============ هندلر چت (با filters.ALL) ============
     application.add_handler(MessageHandler(filters.ALL, handle_chat_message))
-    
-    # ============ بعد test_text برای دیباگ ============
-    application.add_handler(MessageHandler(filters.ALL, test_text))
     
     application.add_handler(CallbackQueryHandler(privacy_toggle, pattern='^privacy_toggle_(age|city|change_visibility)$'))
     
-    logger.info("Bot started with Polling!")
-    application.run_polling(allowed_updates=Update.ALL_TYPES)
+    # ============ اجرا با Webhook (برای Render) ============
+    webhook_url = f"https://{os.environ.get('RENDER_EXTERNAL_HOSTNAME')}/webhook"
     
+    logger.info(f"Starting webhook on port {PORT} with URL: {webhook_url}")
+    
+    application.run_webhook(
+        listen="0.0.0.0",
+        port=PORT,
+        url_path=TOKEN,
+        webhook_url=webhook_url
+    )
+
 if __name__ == '__main__':
     main()
