@@ -877,7 +877,7 @@ async def handle_request(update: Update, context: ContextTypes.DEFAULT_TYPE):
         conn.commit()
         conn.close()
         
-        # ارسال پیام تذکر به هر دو طرف
+        # قوانین چت
         chat_rules = (
             "📋 **قوانین چت در بات هم‌نوا**\n\n"
             "🔒 **حریم خصوصی:**\n"
@@ -896,7 +896,6 @@ async def handle_request(update: Update, context: ContextTypes.DEFAULT_TYPE):
             "✨ امیدواریم لحظات خوبی را در کنار هم تجربه کنید. ✨"
         )
         
-        # ارسال قوانین به هر دو طرف
         try:
             await context.bot.send_message(
                 user_id,
@@ -990,7 +989,6 @@ async def start_chat(update: Update, context: ContextTypes.DEFAULT_TYPE):
     
     other_user = chat[1] if chat[0] == current_user else chat[0]
     
-    # لاگ برای دیباگ
     logger.info(f"💬 Starting chat: chat_id={chat_id}, user={current_user}, partner={other_user}")
     
     context.user_data['active_chat'] = chat_id
@@ -1011,6 +1009,7 @@ async def start_chat(update: Update, context: ContextTypes.DEFAULT_TYPE):
         await query.message.delete()
     except:
         pass
+
 async def handle_chat_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
     if 'active_chat' not in context.user_data:
         await update.message.reply_text(
@@ -1022,43 +1021,119 @@ async def handle_chat_message(update: Update, context: ContextTypes.DEFAULT_TYPE
     
     chat_id = context.user_data['active_chat']
     sender_id = update.effective_user.id
+    partner_id = context.user_data['chat_partner']
     
-    # ========== از دیتابیس بگیر، نه از context ==========
+    logger.info(f"🔍 Chat Message: chat_id={chat_id}, sender={sender_id}, partner={partner_id}")
+    
     conn = sqlite3.connect('matchbot.db')
     c = conn.cursor()
-    c.execute("SELECT user1, user2, is_active, blocked_by FROM chats WHERE id=?", (chat_id,))
+    c.execute("SELECT is_active, blocked_by FROM chats WHERE id=?", (chat_id,))
     chat = c.fetchone()
     conn.close()
     
-    if not chat or not chat[2]:
+    if not chat or not chat[0]:
         await update.message.reply_text("❌ این چت فعال نیست!", reply_markup=main_menu_keyboard())
         context.user_data.pop('active_chat', None)
+        context.user_data.pop('chat_partner', None)
         return
     
-    if chat[3] and chat[3] != sender_id:
+    if chat[1] and chat[1] != sender_id:
         await update.message.reply_text("🚫 شما توسط طرف مقابل بلاک شده‌اید!", reply_markup=main_menu_keyboard())
         context.user_data.pop('active_chat', None)
+        context.user_data.pop('chat_partner', None)
         return
     
-    # پیدا کردن طرف مقابل از دیتابیس (مستقل از context)
-    partner_id = chat[1] if chat[0] == sender_id else chat[0]
+    message_type = "text"
+    message_text = ""
+    file_id = None
     
-    logger.info(f"🔍 Chat: sender={sender_id}, partner={partner_id}")
+    if update.message.text:
+        message_text = update.message.text
+        message_type = "text"
+        logger.info(f"📝 Text: {message_text}")
+    elif update.message.photo:
+        message_type = "photo"
+        file_id = update.message.photo[-1].file_id
+        message_text = "📸 عکس"
+        logger.info(f"📸 Photo: {file_id}")
+    elif update.message.sticker:
+        message_type = "sticker"
+        file_id = update.message.sticker.file_id
+        message_text = "🎨 استیکر"
+        logger.info(f"🎨 Sticker: {file_id}")
+    elif update.message.animation:
+        message_type = "gif"
+        file_id = update.message.animation.file_id
+        message_text = "🎬 گیف"
+        logger.info(f"🎬 GIF: {file_id}")
+    elif update.message.video:
+        message_type = "video"
+        file_id = update.message.video.file_id
+        message_text = "🎥 ویدیو"
+    elif update.message.voice:
+        message_type = "voice"
+        file_id = update.message.voice.file_id
+        message_text = "🎤 ویس"
+    elif update.message.audio:
+        message_type = "audio"
+        file_id = update.message.audio.file_id
+        message_text = "🎵 آهنگ"
+    else:
+        await update.message.reply_text("❌ این نوع پیام پشتیبانی نمی‌شه!")
+        return
     
-    # ... تشخیص نوع پیام ...
+    conn = sqlite3.connect('matchbot.db')
+    c = conn.cursor()
+    c.execute("""
+        INSERT INTO messages (chat_id, sender_id, message_text, message_type, file_id, timestamp)
+        VALUES (?, ?, ?, ?, ?, ?)
+    """, (chat_id, sender_id, message_text, message_type, file_id, datetime.now()))
+    conn.commit()
+    conn.close()
     
     try:
+        logger.info(f"📤 Sending to partner {partner_id}...")
+        
         if message_type == "text":
-            await context.bot.send_message(partner_id, f"📩 پیام جدید:\n\n{message_text}")
+            await context.bot.send_message(
+                partner_id,
+                f"📩 پیام جدید:\n\n{message_text}"
+            )
+            logger.info(f"✅ Text sent to {partner_id}")
+        elif message_type == "photo":
+            await context.bot.send_photo(
+                partner_id,
+                file_id,
+                caption="📸 عکس جدید"
+            )
+            logger.info(f"✅ Photo sent to {partner_id}")
         elif message_type == "sticker":
             await context.bot.send_sticker(partner_id, file_id)
-        # ... بقیه ...
+            logger.info(f"✅ Sticker sent to {partner_id}")
+        elif message_type == "gif":
+            await context.bot.send_animation(
+                partner_id,
+                file_id,
+                caption="🎬 گیف جدید"
+            )
+            logger.info(f"✅ GIF sent to {partner_id}")
+        elif message_type == "video":
+            await context.bot.send_video(
+                partner_id,
+                file_id,
+                caption="🎥 ویدیو جدید"
+            )
+        elif message_type == "voice":
+            await context.bot.send_voice(partner_id, file_id)
+        elif message_type == "audio":
+            await context.bot.send_audio(partner_id, file_id)
         
         await update.message.reply_text("✅")
-    except Exception as e:
-        logger.error(f"Error: {e}")
-        await update.message.reply_text("❌ ارسال ناموفق!")
         
+    except Exception as e:
+        logger.error(f"❌ Error sending to partner {partner_id}: {e}")
+        await update.message.reply_text("❌ ارسال ناموفق!")
+
 async def request_photo(update: Update, context: ContextTypes.DEFAULT_TYPE):
     query = update.callback_query
     await query.answer()
@@ -1624,6 +1699,7 @@ def main():
     
     application.add_handler(conv_handler)
     
+    # منوی اصلی
     application.add_handler(CallbackQueryHandler(search, pattern='^search$'))
     application.add_handler(CallbackQueryHandler(edit_profile, pattern='^edit_profile$'))
     application.add_handler(CallbackQueryHandler(my_requests, pattern='^my_requests$'))
@@ -1633,23 +1709,29 @@ def main():
     application.add_handler(CallbackQueryHandler(help_command, pattern='^help$'))
     application.add_handler(CallbackQueryHandler(back_to_menu, pattern='^back_to_menu$'))
     
+    # ویرایش پروفایل
     application.add_handler(CallbackQueryHandler(edit_profile_field, pattern='^edit_(gender|age|purpose|city|interests|job|description|photo)$'))
     application.add_handler(CallbackQueryHandler(update_profile_field, pattern='^update_(gender_|purpose_|job_|interest_|interests_done)'))
     application.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, handle_profile_text_input))
     application.add_handler(MessageHandler(filters.PHOTO, handle_profile_text_input))
     
+    # جستجو
     application.add_handler(CallbackQueryHandler(candidate_action, pattern='^(like|dislike|more)_'))
     application.add_handler(CallbackQueryHandler(show_candidate, pattern='^next_candidate$'))
     application.add_handler(CallbackQueryHandler(back_to_candidate, pattern='^back_'))
     
+    # درخواست‌ها
     application.add_handler(CallbackQueryHandler(view_requester, pattern='^view_'))
     application.add_handler(CallbackQueryHandler(handle_request, pattern='^(accept|reject)_'))
     
+    # چت
     application.add_handler(CallbackQueryHandler(start_chat, pattern='^chat_'))
     application.add_handler(CallbackQueryHandler(request_photo, pattern='^photo_'))
     application.add_handler(CallbackQueryHandler(block_user, pattern='^block_'))
     application.add_handler(CallbackQueryHandler(block_reason, pattern='^block_reason_'))
     application.add_handler(CallbackQueryHandler(close_chat, pattern='^close_chat$'))
+    
+    # ============ همه نوع پیام برای چت ============
     application.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, handle_chat_message))
     application.add_handler(MessageHandler(filters.PHOTO, handle_chat_message))
     application.add_handler(MessageHandler(filters.Sticker.ALL, handle_chat_message))
@@ -1658,6 +1740,7 @@ def main():
     application.add_handler(MessageHandler(filters.VOICE, handle_chat_message))
     application.add_handler(MessageHandler(filters.AUDIO, handle_chat_message))
     
+    # حریم خصوصی
     application.add_handler(CallbackQueryHandler(privacy_toggle, pattern='^privacy_toggle_(age|city|change_visibility)$'))
     
     logger.info("Bot started with Polling!")
