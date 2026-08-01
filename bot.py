@@ -1078,6 +1078,13 @@ async def handle_chat_message(update: Update, context: ContextTypes.DEFAULT_TYPE
     except Exception as e:
         logger.error(f"❌ Error: {e}")
         await update.message.reply_text(f"❌ ارسال ناموفق!")
+
+async def test_text(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    logger.info(f"🧪 TEST TEXT: {update.message.text}")
+    await update.message.reply_text(f"شما نوشتی: {update.message.text}")
+
+# توی main():
+application.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, test_text))
         
 async def request_photo(update: Update, context: ContextTypes.DEFAULT_TYPE):
     query = update.callback_query
