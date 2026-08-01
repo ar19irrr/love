@@ -1619,6 +1619,7 @@ def main():
     
     application = Application.builder().token(TOKEN).build()
     
+    # ============ همه هندلرها ============
     conv_handler = ConversationHandler(
         entry_points=[CommandHandler('start', start)],
         states={
@@ -1673,15 +1674,13 @@ def main():
     application.add_handler(CallbackQueryHandler(block_reason, pattern='^block_reason_'))
     application.add_handler(CallbackQueryHandler(close_chat, pattern='^close_chat$'))
     
-    # ============ هندلر چت (با filters.ALL) ============
     application.add_handler(MessageHandler(filters.ALL, handle_chat_message))
     
     application.add_handler(CallbackQueryHandler(privacy_toggle, pattern='^privacy_toggle_(age|city|change_visibility)$'))
     
     # ============ اجرا با Polling ============
-logger.info("Bot started with Polling!")
-application.run_polling(allowed_updates=Update.ALL_TYPES)
-    
+    logger.info("Bot started with Polling!")
+    application.run_polling(allowed_updates=Update.ALL_TYPES)
 
 if __name__ == '__main__':
     main()
