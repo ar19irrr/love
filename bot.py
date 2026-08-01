@@ -7,7 +7,6 @@ from telegram import Update, InlineKeyboardButton, InlineKeyboardMarkup
 from telegram.ext import Application, CommandHandler, CallbackQueryHandler, MessageHandler, filters, ContextTypes, ConversationHandler
 
 TOKEN = os.environ.get('TOKEN', "YOUR_BOT_TOKEN_HERE")
-PORT = int(os.environ.get('PORT', 10000))
 
 logging.basicConfig(
     format='%(asctime)s - %(name)s - %(levelname)s - %(message)s',
@@ -1009,6 +1008,81 @@ async def start_chat(update: Update, context: ContextTypes.DEFAULT_TYPE):
     except:
         pass
 
+# ============ هندلر مخصوص متن ============
+async def handle_text_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    logger.info(f"📩 TEXT MESSAGE: {update.message.text}")
+    
+    if 'active_chat' not in context.user_data:
+        await update.message.reply_text("❌ شما در هیچ چتی نیستی!", reply_markup=main_menu_keyboard())
+        return
+    
+    chat_id = context.user_data['active_chat']
+    sender_id = update.effective_user.id
+    
+    conn = sqlite3.connect('matchbot.db')
+    c = conn.cursor()
+    c.execute("SELECT user1, user2, is_active, blocked_by FROM chats WHERE id=?", (chat_id,))
+    chat = c.fetchone()
+    conn.close()
+    
+    if not chat or not chat[2]:
+        await update.message.reply_text("❌ این چت فعال نیست!", reply_markup=main_menu_keyboard())
+        context.user_data.pop('active_chat', None)
+        return
+    
+    if chat[3] and chat[3] != sender_id:
+        await update.message.reply_text("🚫 شما توسط طرف مقابل بلاک شده‌اید!", reply_markup=main_menu_keyboard())
+        context.user_data.pop('active_chat', None)
+        return
+    
+    partner_id = chat[1] if chat[0] == sender_id else chat[0]
+    
+    try:
+        await context.bot.send_message(partner_id, f"📩 {update.message.text}")
+        await update.message.reply_text("✅")
+        logger.info(f"✅ Text sent to {partner_id}")
+    except Exception as e:
+        logger.error(f"❌ Error: {e}")
+        await update.message.reply_text("❌ ارسال ناموفق!")
+
+# ============ هندلر مخصوص عکس ============
+async def handle_photo_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    logger.info(f"📸 PHOTO MESSAGE: user={update.effective_user.id}")
+    
+    if 'active_chat' not in context.user_data:
+        await update.message.reply_text("❌ شما در هیچ چتی نیستی!", reply_markup=main_menu_keyboard())
+        return
+    
+    chat_id = context.user_data['active_chat']
+    sender_id = update.effective_user.id
+    
+    conn = sqlite3.connect('matchbot.db')
+    c = conn.cursor()
+    c.execute("SELECT user1, user2, is_active, blocked_by FROM chats WHERE id=?", (chat_id,))
+    chat = c.fetchone()
+    conn.close()
+    
+    if not chat or not chat[2]:
+        await update.message.reply_text("❌ این چت فعال نیست!", reply_markup=main_menu_keyboard())
+        context.user_data.pop('active_chat', None)
+        return
+    
+    if chat[3] and chat[3] != sender_id:
+        await update.message.reply_text("🚫 شما توسط طرف مقابل بلاک شده‌اید!", reply_markup=main_menu_keyboard())
+        context.user_data.pop('active_chat', None)
+        return
+    
+    partner_id = chat[1] if chat[0] == sender_id else chat[0]
+    
+    try:
+        await context.bot.send_photo(partner_id, update.message.photo[-1].file_id, caption="📸 عکس")
+        await update.message.reply_text("✅")
+        logger.info(f"✅ Photo sent to {partner_id}")
+    except Exception as e:
+        logger.error(f"❌ Error: {e}")
+        await update.message.reply_text("❌ ارسال ناموفق!")
+
+# ============ هندلر اصلی برای استیکر و گیف ============
 async def handle_chat_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
     logger.info(f"📩 handle_chat_message STARTED! user={update.effective_user.id}")
     
@@ -1041,17 +1115,7 @@ async def handle_chat_message(update: Update, context: ContextTypes.DEFAULT_TYPE
     logger.info(f"🔍 sender={sender_id}, partner={partner_id}")
     
     try:
-        if update.message.text:
-            await context.bot.send_message(partner_id, f"📩 {update.message.text}")
-            await update.message.reply_text("✅")
-            logger.info(f"✅ Text sent to {partner_id}")
-            
-        elif update.message.photo:
-            await context.bot.send_photo(partner_id, update.message.photo[-1].file_id, caption="📸 عکس")
-            await update.message.reply_text("✅")
-            logger.info(f"✅ Photo sent to {partner_id}")
-            
-        elif update.message.sticker:
+        if update.message.sticker:
             await context.bot.send_sticker(partner_id, update.message.sticker.file_id)
             await update.message.reply_text("✅")
             logger.info(f"✅ Sticker sent to {partner_id}")
@@ -1619,7 +1683,6 @@ def main():
     
     application = Application.builder().token(TOKEN).build()
     
-    # ============ همه هندلرها ============
     conv_handler = ConversationHandler(
         entry_points=[CommandHandler('start', start)],
         states={
@@ -1674,6 +1737,9 @@ def main():
     application.add_handler(CallbackQueryHandler(block_reason, pattern='^block_reason_'))
     application.add_handler(CallbackQueryHandler(close_chat, pattern='^close_chat$'))
     
+    # ============ هندلرهای جداگانه برای چت ============
+    application.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, handle_text_message))
+    application.add_handler(MessageHandler(filters.PHOTO, handle_photo_message))
     application.add_handler(MessageHandler(filters.ALL, handle_chat_message))
     
     application.add_handler(CallbackQueryHandler(privacy_toggle, pattern='^privacy_toggle_(age|city|change_visibility)$'))
