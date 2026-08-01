@@ -1089,29 +1089,53 @@ async def handle_chat_message(update: Update, context: ContextTypes.DEFAULT_TYPE
         logger.info(f"📤 Sending to partner {partner_id}...")
         
         if message_type == "text":
-            await context.bot.send_message(partner_id, f"📩 پیام جدید:\n\n{message_text}")
+            await context.bot.send_message(
+                chat_id=partner_id,
+                text=f"📩 پیام جدید:\n\n{message_text}"
+            )
             logger.info(f"✅ Text sent to {partner_id}")
         elif message_type == "photo":
-            await context.bot.send_photo(partner_id, file_id, caption="📸 عکس جدید")
+            await context.bot.send_photo(
+                chat_id=partner_id,
+                photo=file_id,
+                caption="📸 عکس جدید"
+            )
             logger.info(f"✅ Photo sent to {partner_id}")
         elif message_type == "sticker":
-            await context.bot.send_sticker(partner_id, file_id)
+            await context.bot.send_sticker(
+                chat_id=partner_id,
+                sticker=file_id
+            )
             logger.info(f"✅ Sticker sent to {partner_id}")
         elif message_type == "gif":
-            await context.bot.send_animation(partner_id, file_id, caption="🎬 گیف جدید")
+            await context.bot.send_animation(
+                chat_id=partner_id,
+                animation=file_id,
+                caption="🎬 گیف جدید"
+            )
             logger.info(f"✅ GIF sent to {partner_id}")
         elif message_type == "video":
-            await context.bot.send_video(partner_id, file_id, caption="🎥 ویدیو جدید")
+            await context.bot.send_video(
+                chat_id=partner_id,
+                video=file_id,
+                caption="🎥 ویدیو جدید"
+            )
         elif message_type == "voice":
-            await context.bot.send_voice(partner_id, file_id)
+            await context.bot.send_voice(
+                chat_id=partner_id,
+                voice=file_id
+            )
         elif message_type == "audio":
-            await context.bot.send_audio(partner_id, file_id)
+            await context.bot.send_audio(
+                chat_id=partner_id,
+                audio=file_id
+            )
         
         await update.message.reply_text("✅")
         
     except Exception as e:
         logger.error(f"❌ Error sending to partner {partner_id}: {e}")
-        await update.message.reply_text("❌ ارسال ناموفق!")
+        await update.message.reply_text(f"❌ ارسال ناموفق!")
 
 async def request_photo(update: Update, context: ContextTypes.DEFAULT_TYPE):
     query = update.callback_query
@@ -1651,7 +1675,6 @@ def main():
     
     application = Application.builder().token(TOKEN).build()
     
-    # ============ همه هندلرها ============
     conv_handler = ConversationHandler(
         entry_points=[CommandHandler('start', start)],
         states={
@@ -1679,7 +1702,7 @@ def main():
     
     application.add_handler(conv_handler)
     
-    # منوی اصلی
+    # ============ منوی اصلی ============
     application.add_handler(CallbackQueryHandler(search, pattern='^search$'))
     application.add_handler(CallbackQueryHandler(edit_profile, pattern='^edit_profile$'))
     application.add_handler(CallbackQueryHandler(my_requests, pattern='^my_requests$'))
@@ -1689,41 +1712,36 @@ def main():
     application.add_handler(CallbackQueryHandler(help_command, pattern='^help$'))
     application.add_handler(CallbackQueryHandler(back_to_menu, pattern='^back_to_menu$'))
     
-    # ویرایش پروفایل
+    # ============ ویرایش پروفایل ============
     application.add_handler(CallbackQueryHandler(edit_profile_field, pattern='^edit_(gender|age|purpose|city|interests|job|description|photo)$'))
     application.add_handler(CallbackQueryHandler(update_profile_field, pattern='^update_(gender_|purpose_|job_|interest_|interests_done)'))
     application.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, handle_profile_text_input))
     application.add_handler(MessageHandler(filters.PHOTO, handle_profile_text_input))
     
-    # جستجو
+    # ============ جستجو ============
     application.add_handler(CallbackQueryHandler(candidate_action, pattern='^(like|dislike|more)_'))
     application.add_handler(CallbackQueryHandler(show_candidate, pattern='^next_candidate$'))
     application.add_handler(CallbackQueryHandler(back_to_candidate, pattern='^back_'))
     
-    # درخواست‌ها
+    # ============ درخواست‌ها ============
     application.add_handler(CallbackQueryHandler(view_requester, pattern='^view_'))
     application.add_handler(CallbackQueryHandler(handle_request, pattern='^(accept|reject)_'))
     
-    # چت
+    # ============ چت ============
     application.add_handler(CallbackQueryHandler(start_chat, pattern='^chat_'))
     application.add_handler(CallbackQueryHandler(request_photo, pattern='^photo_'))
     application.add_handler(CallbackQueryHandler(block_user, pattern='^block_'))
     application.add_handler(CallbackQueryHandler(block_reason, pattern='^block_reason_'))
     application.add_handler(CallbackQueryHandler(close_chat, pattern='^close_chat$'))
     
-    application.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, handle_chat_message))
-    application.add_handler(MessageHandler(filters.PHOTO, handle_chat_message))
-    application.add_handler(MessageHandler(filters.Sticker.ALL, handle_chat_message))
-    application.add_handler(MessageHandler(filters.ANIMATION, handle_chat_message))
-    application.add_handler(MessageHandler(filters.VIDEO, handle_chat_message))
-    application.add_handler(MessageHandler(filters.VOICE, handle_chat_message))
-    application.add_handler(MessageHandler(filters.AUDIO, handle_chat_message))
+    # ============ پیام‌های چت (با filters.ALL) ============
+    application.add_handler(MessageHandler(filters.ALL, handle_chat_message))
     
+    # ============ حریم خصوصی ============
     application.add_handler(CallbackQueryHandler(privacy_toggle, pattern='^privacy_toggle_(age|city|change_visibility)$'))
     
-    # ============ Polling ============
+    # ============ اجرا با Polling ============
     logger.info("Bot started with Polling!")
     application.run_polling(allowed_updates=Update.ALL_TYPES)
-
 if __name__ == '__main__':
     main()
