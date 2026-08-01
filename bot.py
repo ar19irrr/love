@@ -84,7 +84,7 @@ def init_db():
         created_at TIMESTAMP
     )''')
     
-    # ایندکس‌ها برای سرعت
+    # ایندکس‌ها
     c.execute("CREATE INDEX IF NOT EXISTS idx_users_age ON users(age)")
     c.execute("CREATE INDEX IF NOT EXISTS idx_users_purpose ON users(purpose)")
     c.execute("CREATE INDEX IF NOT EXISTS idx_users_city ON users(city)")
@@ -102,7 +102,7 @@ def init_db():
     
     conn.commit()
     conn.close()
-    logger.info("Database initialized with indexes!")
+    logger.info("Database initialized!")
 
 def get_user(user_id):
     conn = sqlite3.connect('matchbot.db')
@@ -877,7 +877,6 @@ async def handle_request(update: Update, context: ContextTypes.DEFAULT_TYPE):
         conn.commit()
         conn.close()
         
-        # قوانین چت
         chat_rules = (
             "📋 **قوانین چت در بات هم‌نوا**\n\n"
             "🔒 **حریم خصوصی:**\n"
@@ -1011,6 +1010,7 @@ async def start_chat(update: Update, context: ContextTypes.DEFAULT_TYPE):
         pass
 
 async def handle_chat_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    # چک کن کاربر توی چت هست
     if 'active_chat' not in context.user_data:
         await update.message.reply_text(
             "❌ شما در هیچ چتی نیستی!\n"
@@ -1022,7 +1022,7 @@ async def handle_chat_message(update: Update, context: ContextTypes.DEFAULT_TYPE
     chat_id = context.user_data['active_chat']
     sender_id = update.effective_user.id
     
-    # ========== گرفتن partner از دیتابیس ==========
+    # گرفتن partner از دیتابیس
     conn = sqlite3.connect('matchbot.db')
     c = conn.cursor()
     c.execute("SELECT user1, user2, is_active, blocked_by FROM chats WHERE id=?", (chat_id,))
@@ -1039,7 +1039,6 @@ async def handle_chat_message(update: Update, context: ContextTypes.DEFAULT_TYPE
         context.user_data.pop('active_chat', None)
         return
     
-    # پیدا کردن طرف مقابل از دیتابیس
     partner_id = chat[1] if chat[0] == sender_id else chat[0]
     
     logger.info(f"🔍 Chat: sender={sender_id}, partner={partner_id}")
@@ -1094,57 +1093,48 @@ async def handle_chat_message(update: Update, context: ContextTypes.DEFAULT_TYPE
     conn.commit()
     conn.close()
     
-    # ========== ارسال به طرف مقابل ==========
+    # ارسال به طرف مقابل
     try:
         logger.info(f"📤 Sending to partner {partner_id}...")
         
         if message_type == "text":
             await context.bot.send_message(
-                chat_id=partner_id,
-                text=f"📩 پیام جدید:\n\n{message_text}"
+                partner_id,
+                f"📩 پیام جدید:\n\n{message_text}"
             )
             logger.info(f"✅ Text sent to {partner_id}")
         elif message_type == "photo":
             await context.bot.send_photo(
-                chat_id=partner_id,
-                photo=file_id,
+                partner_id,
+                file_id,
                 caption="📸 عکس جدید"
             )
             logger.info(f"✅ Photo sent to {partner_id}")
         elif message_type == "sticker":
-            await context.bot.send_sticker(
-                chat_id=partner_id,
-                sticker=file_id
-            )
+            await context.bot.send_sticker(partner_id, file_id)
             logger.info(f"✅ Sticker sent to {partner_id}")
         elif message_type == "gif":
             await context.bot.send_animation(
-                chat_id=partner_id,
-                animation=file_id,
+                partner_id,
+                file_id,
                 caption="🎬 گیف جدید"
             )
             logger.info(f"✅ GIF sent to {partner_id}")
         elif message_type == "video":
             await context.bot.send_video(
-                chat_id=partner_id,
-                video=file_id,
+                partner_id,
+                file_id,
                 caption="🎥 ویدیو جدید"
             )
         elif message_type == "voice":
-            await context.bot.send_voice(
-                chat_id=partner_id,
-                voice=file_id
-            )
+            await context.bot.send_voice(partner_id, file_id)
         elif message_type == "audio":
-            await context.bot.send_audio(
-                chat_id=partner_id,
-                audio=file_id
-            )
+            await context.bot.send_audio(partner_id, file_id)
         
         await update.message.reply_text("✅")
         
     except Exception as e:
-        logger.error(f"❌ Error sending to {partner_id}: {e}")
+        logger.error(f"❌ Error sending to partner {partner_id}: {e}")
         await update.message.reply_text(f"❌ ارسال ناموفق!")
 
 async def request_photo(update: Update, context: ContextTypes.DEFAULT_TYPE):
