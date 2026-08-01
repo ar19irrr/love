@@ -1008,14 +1008,14 @@ async def start_chat(update: Update, context: ContextTypes.DEFAULT_TYPE):
     except:
         pass
 
-# ============ تست برای تشخیص متن ============
+# ============ تست برای تشخیص همه چیز ============
 async def test_text(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    logger.info(f"🧪 TEST TEXT: {update.message.text}")
-    await update.message.reply_text(f"شما نوشتی: {update.message.text}")
+    logger.info(f"🧪 TEST: user={update.effective_user.id}, text={update.message.text if update.message.text else 'NO TEXT'}, photo={bool(update.message.photo)}, sticker={bool(update.message.sticker)}")
+    await update.message.reply_text(f"📩 دریافت شد: {update.message.text if update.message.text else 'چیزی غیر از متن'}")
 
 # ============ هندلر اصلی چت ============
 async def handle_chat_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    logger.info(f"📩 handle_chat_message called! user={update.effective_user.id}, has_text={bool(update.message.text)}, has_photo={bool(update.message.photo)}")
+    logger.info(f"📩 handle_chat_message called! user={update.effective_user.id}")
     
     if 'active_chat' not in context.user_data:
         await update.message.reply_text("❌ شما در هیچ چتی نیستی!", reply_markup=main_menu_keyboard())
@@ -1676,10 +1676,8 @@ def main():
     application.add_handler(CallbackQueryHandler(block_reason, pattern='^block_reason_'))
     application.add_handler(CallbackQueryHandler(close_chat, pattern='^close_chat$'))
     
-    # ============ تست برای متن ============
-    application.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, test_text))
-    
-    # ============ هندلر اصلی چت برای همه نوع پیام ============
+    # ============ همه چیز با filters.ALL ============
+    application.add_handler(MessageHandler(filters.ALL, test_text))
     application.add_handler(MessageHandler(filters.ALL, handle_chat_message))
     
     application.add_handler(CallbackQueryHandler(privacy_toggle, pattern='^privacy_toggle_(age|city|change_visibility)$'))
