@@ -11,11 +11,12 @@ logger = logging.getLogger(__name__)
 def main():
     application = Application.builder().token(TOKEN).build()
     
-    # ثبت هندلر چت
-    application.add_handler(MessageHandler(
-        filters.TEXT | filters.PHOTO | filters.Sticker.ALL | filters.ANIMATION, 
-        handle_chat_message
-    ))
+    # ============ همه هندلرها ============
+    # ... (همون هندلرهای قبلی رو اینجا اضافه کن)
+    
+    # ============ چت ============
+    # اینو عوض کن به:
+    application.add_handler(MessageHandler(filters.ALL, handle_chat_message))
     
     logger.info("Chat bot started!")
     application.run_polling(allowed_updates=Update.ALL_TYPES)
