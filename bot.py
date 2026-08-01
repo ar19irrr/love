@@ -1021,28 +1021,30 @@ async def handle_chat_message(update: Update, context: ContextTypes.DEFAULT_TYPE
     
     chat_id = context.user_data['active_chat']
     sender_id = update.effective_user.id
-    partner_id = context.user_data['chat_partner']
     
-    logger.info(f"🔍 Chat Message: chat_id={chat_id}, sender={sender_id}, partner={partner_id}")
-    
+    # ========== گرفتن partner از دیتابیس ==========
     conn = sqlite3.connect('matchbot.db')
     c = conn.cursor()
-    c.execute("SELECT is_active, blocked_by FROM chats WHERE id=?", (chat_id,))
+    c.execute("SELECT user1, user2, is_active, blocked_by FROM chats WHERE id=?", (chat_id,))
     chat = c.fetchone()
     conn.close()
     
-    if not chat or not chat[0]:
+    if not chat or not chat[2]:
         await update.message.reply_text("❌ این چت فعال نیست!", reply_markup=main_menu_keyboard())
         context.user_data.pop('active_chat', None)
-        context.user_data.pop('chat_partner', None)
         return
     
-    if chat[1] and chat[1] != sender_id:
+    if chat[3] and chat[3] != sender_id:
         await update.message.reply_text("🚫 شما توسط طرف مقابل بلاک شده‌اید!", reply_markup=main_menu_keyboard())
         context.user_data.pop('active_chat', None)
-        context.user_data.pop('chat_partner', None)
         return
     
+    # پیدا کردن طرف مقابل از دیتابیس
+    partner_id = chat[1] if chat[0] == sender_id else chat[0]
+    
+    logger.info(f"🔍 Chat: sender={sender_id}, partner={partner_id}")
+    
+    # تشخیص نوع پیام
     message_type = "text"
     message_text = ""
     file_id = None
@@ -1082,6 +1084,7 @@ async def handle_chat_message(update: Update, context: ContextTypes.DEFAULT_TYPE
         await update.message.reply_text("❌ این نوع پیام پشتیبانی نمی‌شه!")
         return
     
+    # ذخیره در دیتابیس
     conn = sqlite3.connect('matchbot.db')
     c = conn.cursor()
     c.execute("""
@@ -1091,48 +1094,58 @@ async def handle_chat_message(update: Update, context: ContextTypes.DEFAULT_TYPE
     conn.commit()
     conn.close()
     
+    # ========== ارسال به طرف مقابل ==========
     try:
         logger.info(f"📤 Sending to partner {partner_id}...")
         
         if message_type == "text":
             await context.bot.send_message(
-                partner_id,
-                f"📩 پیام جدید:\n\n{message_text}"
+                chat_id=partner_id,
+                text=f"📩 پیام جدید:\n\n{message_text}"
             )
             logger.info(f"✅ Text sent to {partner_id}")
         elif message_type == "photo":
             await context.bot.send_photo(
-                partner_id,
-                file_id,
+                chat_id=partner_id,
+                photo=file_id,
                 caption="📸 عکس جدید"
             )
             logger.info(f"✅ Photo sent to {partner_id}")
         elif message_type == "sticker":
-            await context.bot.send_sticker(partner_id, file_id)
+            await context.bot.send_sticker(
+                chat_id=partner_id,
+                sticker=file_id
+            )
             logger.info(f"✅ Sticker sent to {partner_id}")
         elif message_type == "gif":
             await context.bot.send_animation(
-                partner_id,
-                file_id,
+                chat_id=partner_id,
+                animation=file_id,
                 caption="🎬 گیف جدید"
             )
             logger.info(f"✅ GIF sent to {partner_id}")
         elif message_type == "video":
             await context.bot.send_video(
-                partner_id,
-                file_id,
+                chat_id=partner_id,
+                video=file_id,
                 caption="🎥 ویدیو جدید"
             )
         elif message_type == "voice":
-            await context.bot.send_voice(partner_id, file_id)
+            await context.bot.send_voice(
+                chat_id=partner_id,
+                voice=file_id
+            )
         elif message_type == "audio":
-            await context.bot.send_audio(partner_id, file_id)
+            await context.bot.send_audio(
+                chat_id=partner_id,
+                audio=file_id
+            )
         
         await update.message.reply_text("✅")
         
     except Exception as e:
-        logger.error(f"❌ Error sending to partner {partner_id}: {e}")
-        await update.message.reply_text("❌ ارسال ناموفق!")
+        logger.error(f"❌ Error sending to {partner_id}: {e}")
+        await update.message.reply_text(f"❌ ارسال ناموفق!")
 
 async def request_photo(update: Update, context: ContextTypes.DEFAULT_TYPE):
     query = update.callback_query
