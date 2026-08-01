@@ -1043,7 +1043,7 @@ async def handle_chat_message(update: Update, context: ContextTypes.DEFAULT_TYPE
     
     logger.info(f"🔍 Chat: sender={sender_id}, partner={partner_id}")
     
-    # تشخیص نوع پیام
+    # ========== فقط متن و عکس ==========
     message_type = "text"
     message_text = ""
     file_id = None
@@ -1057,30 +1057,9 @@ async def handle_chat_message(update: Update, context: ContextTypes.DEFAULT_TYPE
         file_id = update.message.photo[-1].file_id
         message_text = "📸 عکس"
         logger.info(f"📸 Photo: {file_id}")
-    elif update.message.sticker:
-        message_type = "sticker"
-        file_id = update.message.sticker.file_id
-        message_text = "🎨 استیکر"
-        logger.info(f"🎨 Sticker: {file_id}")
-    elif update.message.animation:
-        message_type = "gif"
-        file_id = update.message.animation.file_id
-        message_text = "🎬 گیف"
-        logger.info(f"🎬 GIF: {file_id}")
-    elif update.message.video:
-        message_type = "video"
-        file_id = update.message.video.file_id
-        message_text = "🎥 ویدیو"
-    elif update.message.voice:
-        message_type = "voice"
-        file_id = update.message.voice.file_id
-        message_text = "🎤 ویس"
-    elif update.message.audio:
-        message_type = "audio"
-        file_id = update.message.audio.file_id
-        message_text = "🎵 آهنگ"
     else:
-        await update.message.reply_text("❌ این نوع پیام پشتیبانی نمی‌شه!")
+        # استیکر، گیف و بقیه رو نادیده بگیر
+        await update.message.reply_text("❌ فقط پیام متنی و عکس پشتیبانی میشه!")
         return
     
     # ذخیره در دیتابیس
@@ -1110,26 +1089,6 @@ async def handle_chat_message(update: Update, context: ContextTypes.DEFAULT_TYPE
                 caption="📸 عکس جدید"
             )
             logger.info(f"✅ Photo sent to {partner_id}")
-        elif message_type == "sticker":
-            await context.bot.send_sticker(partner_id, file_id)
-            logger.info(f"✅ Sticker sent to {partner_id}")
-        elif message_type == "gif":
-            await context.bot.send_animation(
-                partner_id,
-                file_id,
-                caption="🎬 گیف جدید"
-            )
-            logger.info(f"✅ GIF sent to {partner_id}")
-        elif message_type == "video":
-            await context.bot.send_video(
-                partner_id,
-                file_id,
-                caption="🎥 ویدیو جدید"
-            )
-        elif message_type == "voice":
-            await context.bot.send_voice(partner_id, file_id)
-        elif message_type == "audio":
-            await context.bot.send_audio(partner_id, file_id)
         
         await update.message.reply_text("✅")
         
@@ -1737,11 +1696,7 @@ def main():
     # همه نوع پیام برای چت
     application.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, handle_chat_message))
     application.add_handler(MessageHandler(filters.PHOTO, handle_chat_message))
-    application.add_handler(MessageHandler(filters.Sticker.ALL, handle_chat_message))
-    application.add_handler(MessageHandler(filters.ANIMATION, handle_chat_message))
-    application.add_handler(MessageHandler(filters.VIDEO, handle_chat_message))
-    application.add_handler(MessageHandler(filters.VOICE, handle_chat_message))
-    application.add_handler(MessageHandler(filters.AUDIO, handle_chat_message))
+    
     
     # حریم خصوصی
     application.add_handler(CallbackQueryHandler(privacy_toggle, pattern='^privacy_toggle_(age|city|change_visibility)$'))
