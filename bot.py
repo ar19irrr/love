@@ -1008,8 +1008,13 @@ async def start_chat(update: Update, context: ContextTypes.DEFAULT_TYPE):
     except:
         pass
 
+# ============ تست برای تشخیص متن ============
+async def test_text(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    logger.info(f"🧪 TEST TEXT: {update.message.text}")
+    await update.message.reply_text(f"شما نوشتی: {update.message.text}")
+
+# ============ هندلر اصلی چت ============
 async def handle_chat_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    # لاگ برای هر چیزی که میاد
     logger.info(f"📩 handle_chat_message called! user={update.effective_user.id}, has_text={bool(update.message.text)}, has_photo={bool(update.message.photo)}")
     
     if 'active_chat' not in context.user_data:
@@ -1079,13 +1084,6 @@ async def handle_chat_message(update: Update, context: ContextTypes.DEFAULT_TYPE
         logger.error(f"❌ Error: {e}")
         await update.message.reply_text(f"❌ ارسال ناموفق!")
 
-async def test_text(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    logger.info(f"🧪 TEST TEXT: {update.message.text}")
-    await update.message.reply_text(f"شما نوشتی: {update.message.text}")
-
-# توی main():
-application.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, test_text))
-        
 async def request_photo(update: Update, context: ContextTypes.DEFAULT_TYPE):
     query = update.callback_query
     await query.answer()
@@ -1624,7 +1622,6 @@ def main():
     
     application = Application.builder().token(TOKEN).build()
     
-    # ============ هندلر مکالمه ============
     conv_handler = ConversationHandler(
         entry_points=[CommandHandler('start', start)],
         states={
@@ -1652,7 +1649,6 @@ def main():
     
     application.add_handler(conv_handler)
     
-    # ============ منوی اصلی ============
     application.add_handler(CallbackQueryHandler(search, pattern='^search$'))
     application.add_handler(CallbackQueryHandler(edit_profile, pattern='^edit_profile$'))
     application.add_handler(CallbackQueryHandler(my_requests, pattern='^my_requests$'))
@@ -1662,35 +1658,34 @@ def main():
     application.add_handler(CallbackQueryHandler(help_command, pattern='^help$'))
     application.add_handler(CallbackQueryHandler(back_to_menu, pattern='^back_to_menu$'))
     
-    # ============ ویرایش پروفایل ============
     application.add_handler(CallbackQueryHandler(edit_profile_field, pattern='^edit_(gender|age|purpose|city|interests|job|description|photo)$'))
     application.add_handler(CallbackQueryHandler(update_profile_field, pattern='^update_(gender_|purpose_|job_|interest_|interests_done)'))
     application.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, handle_profile_text_input))
     application.add_handler(MessageHandler(filters.PHOTO, handle_profile_text_input))
     
-    # ============ جستجو ============
     application.add_handler(CallbackQueryHandler(candidate_action, pattern='^(like|dislike|more)_'))
     application.add_handler(CallbackQueryHandler(show_candidate, pattern='^next_candidate$'))
     application.add_handler(CallbackQueryHandler(back_to_candidate, pattern='^back_'))
     
-    # ============ درخواست‌ها ============
     application.add_handler(CallbackQueryHandler(view_requester, pattern='^view_'))
     application.add_handler(CallbackQueryHandler(handle_request, pattern='^(accept|reject)_'))
     
-    # ============ چت ============
     application.add_handler(CallbackQueryHandler(start_chat, pattern='^chat_'))
     application.add_handler(CallbackQueryHandler(request_photo, pattern='^photo_'))
     application.add_handler(CallbackQueryHandler(block_user, pattern='^block_'))
     application.add_handler(CallbackQueryHandler(block_reason, pattern='^block_reason_'))
     application.add_handler(CallbackQueryHandler(close_chat, pattern='^close_chat$'))
     
-    # ============ پیام‌های چت (با filters.ALL) ============
+    # ============ تست برای متن ============
+    application.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, test_text))
+    
+    # ============ هندلر اصلی چت برای همه نوع پیام ============
     application.add_handler(MessageHandler(filters.ALL, handle_chat_message))
     
-    # ============ حریم خصوصی ============
     application.add_handler(CallbackQueryHandler(privacy_toggle, pattern='^privacy_toggle_(age|city|change_visibility)$'))
     
     logger.info("Bot started with Polling!")
     application.run_polling(allowed_updates=Update.ALL_TYPES)
+
 if __name__ == '__main__':
     main()
