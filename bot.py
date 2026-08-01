@@ -1009,8 +1009,8 @@ async def start_chat(update: Update, context: ContextTypes.DEFAULT_TYPE):
         pass
 
 async def handle_chat_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    # لاگ برای دیباگ
-    logger.info(f"📩 دریافت پیام از {update.effective_user.id}")
+    # لاگ برای هر چیزی که میاد
+    logger.info(f"📩 handle_chat_message called! user={update.effective_user.id}, has_text={bool(update.message.text)}, has_photo={bool(update.message.photo)}")
     
     if 'active_chat' not in context.user_data:
         await update.message.reply_text("❌ شما در هیچ چتی نیستی!", reply_markup=main_menu_keyboard())
@@ -1039,7 +1039,6 @@ async def handle_chat_message(update: Update, context: ContextTypes.DEFAULT_TYPE
     
     logger.info(f"🔍 sender={sender_id}, partner={partner_id}")
     
-    # ========== تشخیص دقیق نوع پیام ==========
     try:
         if update.message.text:
             await context.bot.send_message(partner_id, f"📩 {update.message.text}")
@@ -1079,6 +1078,7 @@ async def handle_chat_message(update: Update, context: ContextTypes.DEFAULT_TYPE
     except Exception as e:
         logger.error(f"❌ Error: {e}")
         await update.message.reply_text(f"❌ ارسال ناموفق!")
+        
 async def request_photo(update: Update, context: ContextTypes.DEFAULT_TYPE):
     query = update.callback_query
     await query.answer()
