@@ -242,12 +242,10 @@ def get_active_chats(user_id: int) -> List[sqlite3.Row]:
     """, (user_id, user_id))
 
 def is_admin_blocked(user_id: int) -> bool:
-    """بررسی اینکه کاربر توسط ادمین بلاک شده"""
     result = db.fetchone("SELECT * FROM admin_blocks WHERE blocked_user_id=?", (user_id,))
     return result is not None
 
 def get_admin_blocked_users() -> List[int]:
-    """دریافت لیست کاربران بلاک شده توسط ادمین"""
     results = db.fetchall("SELECT blocked_user_id FROM admin_blocks")
     return [row['blocked_user_id'] for row in results]
 
@@ -269,7 +267,6 @@ def main_menu_keyboard(is_admin: bool = False):
     return InlineKeyboardMarkup(keyboard)
 
 def chat_keyboard(other_user: int):
-    """کیبورد شیشه‌ای داخل چت"""
     return InlineKeyboardMarkup([
         [InlineKeyboardButton("📸 درخواست عکس", callback_data=f"photo_{other_user}")],
         [InlineKeyboardButton("🚫 بلاک", callback_data=f"bl_{other_user}")],
@@ -309,8 +306,7 @@ def get_interests_keyboard(selected=None):
                 row.append(InlineKeyboardButton(f"⬜ {item}", callback_data=f"interest_{item}"))
         keyboard.append(row)
     
-    # این دکمه رو عوض کن
-    keyboard.append([InlineKeyboardButton("✅ تموم شد", callback_data="interest_done")])
+    keyboard.append([InlineKeyboardButton("✅ تموم شد", callback_data="interests_done")])
     return InlineKeyboardMarkup(keyboard)
 
 # ============ مراحل ثبت‌نام ============
@@ -374,7 +370,9 @@ async def age_input(update: Update, context: ContextTypes.DEFAULT_TYPE):
         return AGE
     
     await update.message.reply_text(
-        "🎯 **مرحله ۳ از ۱۱: هدف**",
+        "🎯 **مرحله ۳ از ۱۱: هدف**\n\n"
+        "هدف شما از عضویت در این بات چیه؟\n"
+        "گزینه مورد نظرت رو انتخاب کن:",
         parse_mode='Markdown',
         reply_markup=InlineKeyboardMarkup([
             [InlineKeyboardButton("💍 ازدواج", callback_data="purpose_marriage")],
@@ -451,7 +449,6 @@ async def age_max_input(update: Update, context: ContextTypes.DEFAULT_TYPE):
     return INTERESTS
 
 async def show_interests(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    """نمایش صفحه انتخاب علایق"""
     if 'interests' not in context.user_data:
         context.user_data['interests'] = []
     
@@ -459,8 +456,8 @@ async def show_interests(update: Update, context: ContextTypes.DEFAULT_TYPE):
         "🎨 **مرحله ۷ از ۱۱: علایق**\n\n"
         f"**انتخاب شده:** {', '.join(context.user_data['interests']) if context.user_data['interests'] else 'هیچ'}\n\n"
         "روی هر گزینه بزن تا انتخاب یا حذف بشه.\n"
-        "⚠️ **حداکثر ۵ علایق** می‌تونی انتخاب کنی.\n\n"
-        "وقتی تموم شد، دکمه **✅ تموم شد** رو بزن."
+        "⚠️ **حداقل ۱ و حداکثر ۵ علایق** می‌تونی انتخاب کنی.\n\n"
+        "✅ وقتی **حداقل ۱ علاقه** انتخاب کنی، میتونی دکمه **تموم شد** رو بزنی."
     )
     
     if isinstance(update, Update) and update.callback_query:
@@ -478,7 +475,6 @@ async def show_interests(update: Update, context: ContextTypes.DEFAULT_TYPE):
         )
 
 async def interests_selection(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    """انتخاب یا حذف علایق"""
     query = update.callback_query
     await query.answer()
     
@@ -487,7 +483,6 @@ async def interests_selection(update: Update, context: ContextTypes.DEFAULT_TYPE
     
     # اگر کاربر روی "تموم شد" کلیک کرد
     if query.data == "interests_done":
-        # بررسی اینکه حداقل یک علاقه انتخاب شده
         if not context.user_data['interests']:
             await query.edit_message_text(
                 "❌ **حداقل یک علاقه باید انتخاب کنی!**\n\n"
@@ -495,11 +490,10 @@ async def interests_selection(update: Update, context: ContextTypes.DEFAULT_TYPE
                 parse_mode='Markdown',
                 reply_markup=None
             )
-            # دوباره صفحه علایق رو نشون بده
             await show_interests(update, context)
-            return INTERESTS  # <--- اینجا مهمه که برگرده
+            return INTERESTS
         
-        # رفتن به مرحله بعد (وضعیت شغلی)
+        # رفتن به مرحله بعد
         await query.edit_message_text(
             "💼 **مرحله ۸ از ۱۱: وضعیت شغلی/تحصیلی**\n\n"
             "وضعیت شغلی یا تحصیلیت چیه؟\n"
@@ -512,9 +506,9 @@ async def interests_selection(update: Update, context: ContextTypes.DEFAULT_TYPE
                 [InlineKeyboardButton("🏠 خانه‌دار", callback_data="job_home")]
             ])
         )
-        return JOB_STATUS  # <--- اینجا باید JOB_STATUS برگرده
+        return JOB_STATUS
     
-    # حذف "interest_" از ابتدای داده
+    # انتخاب یا حذف علاقه
     interest = query.data.replace("interest_", "")
     
     if interest in context.user_data['interests']:
@@ -529,13 +523,12 @@ async def interests_selection(update: Update, context: ContextTypes.DEFAULT_TYPE
                 reply_markup=None
             )
             await show_interests(update, context)
-            return INTERESTS  # <--- اینجا مهمه که برگرده
+            return INTERESTS
         context.user_data['interests'].append(interest)
         await query.answer(f"✅ {interest} اضافه شد!")
     
-    # دوباره صفحه علایق رو نشون بده
     await show_interests(update, context)
-    return INTERESTS  # <--- اینجا باید INTERESTS برگرده
+    return INTERESTS
 
 async def job_status_selection(update: Update, context: ContextTypes.DEFAULT_TYPE):
     query = update.callback_query
@@ -701,7 +694,8 @@ async def finish_registration(update: Update, context: ContextTypes.DEFAULT_TYPE
     
     return ConversationHandler.END
 
-# ============ بقیه هندلرها ============
+# ============ بقیه هندلرها (جستجو، چت، بلاک، ریپورت، مدیریت) ============
+
 async def search(update: Update, context: ContextTypes.DEFAULT_TYPE):
     query = update.callback_query
     await query.answer()
@@ -2076,6 +2070,7 @@ def main():
         application.add_handler(CallbackQueryHandler(admin_do_unblock, pattern='^admin_unblock_'))
         application.add_handler(CallbackQueryHandler(admin_reports, pattern='^admin_reports$'))
         application.add_handler(CallbackQueryHandler(admin_stats, pattern='^admin_stats$'))
+        application.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, admin_do_block))
         
         # حریم خصوصی
         application.add_handler(CallbackQueryHandler(privacy_toggle, pattern='^privacy_toggle_(age|city|change_visibility)$'))
