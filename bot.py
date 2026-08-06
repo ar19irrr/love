@@ -2005,7 +2005,7 @@ def main():
                 CITY: [MessageHandler(filters.TEXT & ~filters.COMMAND, city_input)],
                 AGE_MIN: [MessageHandler(filters.TEXT & ~filters.COMMAND, age_min_input)],
                 AGE_MAX: [MessageHandler(filters.TEXT & ~filters.COMMAND, age_max_input)],
-                INTERESTS: [CallbackQueryHandler(interests_selection, pattern='^interest_')],
+                INTERESTS: [CallbackQueryHandler(interests_selection, pattern='^(interest_|interests_done)')],
                 JOB_STATUS: [CallbackQueryHandler(job_status_selection, pattern='^job_')],
                 DESCRIPTION: [
                     MessageHandler(filters.TEXT & ~filters.COMMAND, description_input),
