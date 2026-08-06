@@ -1104,6 +1104,7 @@ async def handle_chat_message(update: Update, context: ContextTypes.DEFAULT_TYPE
     except Exception as e:
         logger.error(f"❌ Error sending to {partner_id}: {e}")
         await update.message.reply_text(f"❌ ارسال ناموفق!")
+        
 async def request_photo(update: Update, context: ContextTypes.DEFAULT_TYPE):
     query = update.callback_query
     await query.answer()
