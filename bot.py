@@ -397,7 +397,10 @@ async def purpose_selection(update: Update, context: ContextTypes.DEFAULT_TYPE):
     context.user_data['purpose'] = purpose_map[query.data]
     
     await query.edit_message_text(
-        "🏙️ **مرحله ۴ از ۱۱: شهر**\n\nنام شهرت رو وارد کن:",
+        "🏙️ **مرحله ۴ از ۱۱: شهر**\n\n"
+        "در کدوم شهر زندگی می‌کنی؟\n"
+        "مثال: **تهران، اصفهان، مشهد**\n\n"
+        "نام شهرت رو وارد کن:",
         parse_mode='Markdown'
     )
     return CITY
@@ -406,7 +409,9 @@ async def city_input(update: Update, context: ContextTypes.DEFAULT_TYPE):
     context.user_data['city'] = update.message.text
     
     await update.message.reply_text(
-        "📏 **مرحله ۵ از ۱۱: حداقل سن طرف**\n\nحداقل سن رو وارد کن:",
+        "📏 **مرحله ۵ از ۱۱: حداقل سن طرف**\n\n"
+        "طرف مقابلت حداقل چند سال داشته باشه؟\n"
+        "عدد رو وارد کن:",
         parse_mode='Markdown'
     )
     return AGE_MIN
@@ -423,7 +428,9 @@ async def age_min_input(update: Update, context: ContextTypes.DEFAULT_TYPE):
         return AGE_MIN
     
     await update.message.reply_text(
-        "📏 **مرحله ۶ از ۱۱: حداکثر سن طرف**\n\nحداکثر سن رو وارد کن:",
+        "📏 **مرحله ۶ از ۱۱: حداکثر سن طرف**\n\n"
+        "طرف مقابلت حداکثر چند سال داشته باشه؟\n"
+        "عدد رو وارد کن:",
         parse_mode='Markdown'
     )
     return AGE_MAX
@@ -443,36 +450,59 @@ async def age_max_input(update: Update, context: ContextTypes.DEFAULT_TYPE):
     return INTERESTS
 
 async def show_interests(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """نمایش صفحه انتخاب علایق"""
     if 'interests' not in context.user_data:
         context.user_data['interests'] = []
     
     text = (
         "🎨 **مرحله ۷ از ۱۱: علایق**\n\n"
-        f"انتخاب شده: {', '.join(context.user_data['interests']) if context.user_data['interests'] else 'هیچ'}\n\n"
-        "⚠️ حداکثر ۵ علاقه"
+        f"**انتخاب شده:** {', '.join(context.user_data['interests']) if context.user_data['interests'] else 'هیچ'}\n\n"
+        "روی هر گزینه بزن تا انتخاب یا حذف بشه.\n"
+        "⚠️ **حداکثر ۵ علایق** می‌تونی انتخاب کنی.\n\n"
+        "وقتی تموم شد، دکمه **✅ تموم شد** رو بزن."
     )
     
     if isinstance(update, Update) and update.callback_query:
         query = update.callback_query
-        await query.edit_message_text(text, parse_mode='Markdown', reply_markup=get_interests_keyboard(context.user_data['interests']))
+        await query.edit_message_text(
+            text,
+            parse_mode='Markdown',
+            reply_markup=get_interests_keyboard(context.user_data['interests'])
+        )
     else:
-        await update.message.reply_text(text, parse_mode='Markdown', reply_markup=get_interests_keyboard(context.user_data['interests']))
+        await update.message.reply_text(
+            text,
+            parse_mode='Markdown',
+            reply_markup=get_interests_keyboard(context.user_data['interests'])
+        )
 
 async def interests_selection(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """انتخاب یا حذف علایق"""
     query = update.callback_query
     await query.answer()
     
     if 'interests' not in context.user_data:
         context.user_data['interests'] = []
     
+    # اگر کاربر روی "تموم شد" کلیک کرد
     if query.data == "interests_done":
+        # بررسی اینکه حداقل یک علاقه انتخاب شده
         if not context.user_data['interests']:
-            await query.edit_message_text("❌ حداقل یک علاقه انتخاب کن!", reply_markup=None)
+            await query.edit_message_text(
+                "❌ **حداقل یک علاقه باید انتخاب کنی!**\n\n"
+                "لطفاً حداقل یکی از گزینه‌ها رو انتخاب کن.",
+                parse_mode='Markdown',
+                reply_markup=None
+            )
+            # دوباره صفحه علایق رو نشون بده
             await show_interests(update, context)
             return INTERESTS
         
+        # رفتن به مرحله بعد (وضعیت شغلی)
         await query.edit_message_text(
-            "💼 **مرحله ۸ از ۱۱: وضعیت شغلی**",
+            "💼 **مرحله ۸ از ۱۱: وضعیت شغلی/تحصیلی**\n\n"
+            "وضعیت شغلی یا تحصیلیت چیه؟\n"
+            "گزینه مورد نظرت رو انتخاب کن:",
             parse_mode='Markdown',
             reply_markup=InlineKeyboardMarkup([
                 [InlineKeyboardButton("🎓 دانشجو", callback_data="job_student")],
@@ -483,16 +513,26 @@ async def interests_selection(update: Update, context: ContextTypes.DEFAULT_TYPE
         )
         return JOB_STATUS
     
+    # حذف "interest_" از ابتدای داده
     interest = query.data.replace("interest_", "")
+    
     if interest in context.user_data['interests']:
         context.user_data['interests'].remove(interest)
+        await query.answer(f"❌ {interest} حذف شد!")
     else:
         if len(context.user_data['interests']) >= 5:
-            await query.edit_message_text("❌ حداکثر ۵ علاقه!", reply_markup=None)
+            await query.edit_message_text(
+                "❌ **حداکثر ۵ علاقه** می‌تونی انتخاب کنی!\n"
+                "برای انتخاب جدید، اول یکی از علایق رو حذف کن.",
+                parse_mode='Markdown',
+                reply_markup=None
+            )
             await show_interests(update, context)
             return INTERESTS
         context.user_data['interests'].append(interest)
+        await query.answer(f"✅ {interest} اضافه شد!")
     
+    # دوباره صفحه علایق رو نشون بده
     await show_interests(update, context)
     return INTERESTS
 
@@ -533,7 +573,8 @@ async def description_skip(update: Update, context: ContextTypes.DEFAULT_TYPE):
     context.user_data['description'] = ""
     
     await query.edit_message_text(
-        "📸 **مرحله ۱۰ از ۱۱: عکس پروفایل**\n\nعکس رو بفرست یا رد شدن:",
+        "📸 **مرحله ۱۰ از ۱۱: عکس پروفایل**\n\n"
+        "عکس رو بفرست یا رد شدن:",
         parse_mode='Markdown',
         reply_markup=InlineKeyboardMarkup([[InlineKeyboardButton("⏭️ رد شدن", callback_data="skip_photo")]])
     )
@@ -659,7 +700,7 @@ async def finish_registration(update: Update, context: ContextTypes.DEFAULT_TYPE
     
     return ConversationHandler.END
 
-# ============ جستجو ============
+# ============ بقیه هندلرها ============
 async def search(update: Update, context: ContextTypes.DEFAULT_TYPE):
     query = update.callback_query
     await query.answer()
@@ -767,7 +808,6 @@ async def show_candidate(update: Update, context: ContextTypes.DEFAULT_TYPE):
     
     await query.edit_message_text(message, reply_markup=InlineKeyboardMarkup(keyboard))
 
-# ============ مدیریت درخواست‌ها ============
 async def candidate_action(update: Update, context: ContextTypes.DEFAULT_TYPE):
     query = update.callback_query
     await query.answer()
@@ -1144,7 +1184,7 @@ async def unblock_user(update: Update, context: ContextTypes.DEFAULT_TYPE):
         logger.error(f"Error in unblock_user: {e}")
         await query.edit_message_text("❌ خطا!", reply_markup=main_menu_keyboard())
 
-# ============ گزارش تخلف (با ارسال به ادمین) ============
+# ============ گزارش تخلف ============
 async def report_user(update: Update, context: ContextTypes.DEFAULT_TYPE):
     query = update.callback_query
     await query.answer()
@@ -1187,40 +1227,22 @@ async def report_reason(update: Update, context: ContextTypes.DEFAULT_TYPE):
     chat_id = context.user_data.get('active_chat')
     
     try:
-        # ثبت گزارش در دیتابیس
-        db.execute("""
-            INSERT INTO reports (reporter_id, reported_id, reason, created_at, status)
-            VALUES (?, ?, ?, ?, 'pending')
-        """, (current_user, user_id, reason, datetime.now()))
+        db.execute("INSERT INTO reports (reporter_id, reported_id, reason, created_at, status) VALUES (?, ?, ?, ?, 'pending')", 
+                  (current_user, user_id, reason, datetime.now()))
         
-        reason_text = {
-            "a": "فحاشی و بی‌ادبی",
-            "s": "مزاحمت و اسپم",
-            "f": "دروغ و کلاهبرداری",
-            "i": "محتوای نامناسب"
-        }.get(reason, "نامشخص")
+        reason_text = {"a": "فحاشی", "s": "مزاحمت", "f": "کلاهبرداری", "i": "محتوای نامناسب"}.get(reason, "نامشخص")
         
-        # گرفتن اطلاعات کاربران
-        reporter = get_user_dict(current_user)
-        reported = get_user_dict(user_id)
-        
-        # ارسال گزارش کامل به ادمین با دکمه‌های تصمیم‌گیری
         if ADMIN_ID:
             try:
+                reporter = get_user_dict(current_user)
+                reported = get_user_dict(user_id)
+                
                 admin_msg = (
-                    f"⚠️ **گزارش جدید تخلف** ⚠️\n\n"
-                    f"📌 **شماره گزارش:** #{db.execute('SELECT last_insert_rowid()').fetchone()[0]}\n\n"
-                    f"👤 **گزارش‌دهنده:**\n"
-                    f"   آیدی: `{current_user}`\n"
-                    f"   جنسیت: {reporter['gender'] if reporter else 'نامشخص'}\n"
-                    f"   سن: {reporter['age'] if reporter else 'نامشخص'}\n\n"
-                    f"👤 **گزارش‌شونده:**\n"
-                    f"   آیدی: `{user_id}`\n"
-                    f"   جنسیت: {reported['gender'] if reported else 'نامشخص'}\n"
-                    f"   سن: {reported['age'] if reported else 'نامشخص'}\n\n"
-                    f"📌 **دلیل گزارش:** {reason_text}\n"
-                    f"📅 **زمان:** {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}\n\n"
-                    f"🔹 **لطفاً بررسی کنید و تصمیم بگیرید:**"
+                    f"⚠️ **گزارش جدید**\n\n"
+                    f"📌 گزارش‌دهنده: `{current_user}`\n"
+                    f"📌 گزارش‌شونده: `{user_id}`\n"
+                    f"📌 دلیل: {reason_text}\n"
+                    f"📅 زمان: {datetime.now().strftime('%Y-%m-%d %H:%M')}"
                 )
                 
                 await context.bot.send_message(
@@ -1228,40 +1250,24 @@ async def report_reason(update: Update, context: ContextTypes.DEFAULT_TYPE):
                     admin_msg,
                     parse_mode='Markdown',
                     reply_markup=InlineKeyboardMarkup([
-                        [InlineKeyboardButton("✅ تایید و بلاک کاربر", callback_data=f"admin_block_from_report_{user_id}")],
-                        [InlineKeyboardButton("❌ رد گزارش (الکی)", callback_data=f"admin_reject_report_{user_id}")],
-                        [InlineKeyboardButton("📋 مشاهده همه گزارش‌ها", callback_data="admin_reports")]
+                        [InlineKeyboardButton("✅ تایید و بلاک", callback_data=f"admin_block_from_report_{user_id}")],
+                        [InlineKeyboardButton("❌ رد گزارش", callback_data=f"admin_reject_report_{user_id}")],
+                        [InlineKeyboardButton("📋 همه گزارش‌ها", callback_data="admin_reports")]
                     ])
                 )
-                
-                logger.info(f"✅ Report sent to admin: reporter={current_user}, reported={user_id}, reason={reason_text}")
-                
-            except Exception as e:
-                logger.error(f"Error sending report to admin: {e}")
+            except:
+                pass
         
-        # پاسخ به کاربر گزارش‌دهنده
         reply_markup = chat_keyboard(user_id) if chat_id else main_menu_keyboard()
         
-        await query.edit_message_text(
-            f"✅ **گزارش شما ثبت شد!**\n\n"
-            f"📌 دلیل: {reason_text}\n"
-            f"🆔 کاربر گزارش‌شونده: `{user_id}`\n\n"
-            f"مدیریت گزارش شما رو بررسی میکنه.\n"
-            f"از کمک شما به ما در حفظ امنیت متشکریم.",
-            parse_mode='Markdown',
-            reply_markup=reply_markup
-        )
+        await query.edit_message_text(f"✅ گزارش ثبت شد!\nدلیل: {reason_text}", reply_markup=reply_markup)
         
     except Exception as e:
         logger.error(f"Error in report_reason: {e}")
-        await query.edit_message_text(
-            "❌ خطا در ثبت گزارش!",
-            reply_markup=main_menu_keyboard()
-        )
+        await query.edit_message_text("❌ خطا!", reply_markup=main_menu_keyboard())
 
 # ============ مدیریت گزارش توسط ادمین ============
 async def admin_reject_report(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    """ادمین گزارش رو رد میکنه (الکی بوده)"""
     query = update.callback_query
     await query.answer()
     
@@ -1275,31 +1281,22 @@ async def admin_reject_report(update: Update, context: ContextTypes.DEFAULT_TYPE
         await query.edit_message_text("❌ خطا!", reply_markup=admin_panel_keyboard())
         return
     
-    # بستن گزارش‌های این کاربر
     db.execute("UPDATE reports SET status='rejected' WHERE reported_id=? AND status='pending'", (user_id,))
     
-    # اطلاع به گزارش‌دهنده
     reports = db.fetchall("SELECT reporter_id FROM reports WHERE reported_id=? AND status='rejected'", (user_id,))
     for report in reports:
         try:
             await context.bot.send_message(
                 report['reporter_id'],
-                f"📋 گزارش شما درباره کاربر `{user_id}` توسط مدیریت **رد شد**.\n\n"
-                f"دلیل: گزارش الکی یا بی‌اساس تشخیص داده شده.",
+                f"📋 گزارش شما درباره کاربر `{user_id}` توسط مدیریت **رد شد**.",
                 parse_mode='Markdown'
             )
         except:
             pass
     
-    await query.edit_message_text(
-        f"✅ **گزارش‌های کاربر {user_id} رد شد!**\n\n"
-        f"این کاربر تخلفی نداشته و گزارش‌دهنده‌ها مطلع شدند.",
-        parse_mode='Markdown',
-        reply_markup=admin_panel_keyboard()
-    )
+    await query.edit_message_text(f"✅ گزارش‌های {user_id} رد شد!", reply_markup=admin_panel_keyboard())
 
 async def admin_block_from_report(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    """ادمین کاربر رو از روی گزارش بلاک میکنه"""
     query = update.callback_query
     await query.answer()
     
@@ -1313,48 +1310,32 @@ async def admin_block_from_report(update: Update, context: ContextTypes.DEFAULT_
         await query.edit_message_text("❌ خطا!", reply_markup=admin_panel_keyboard())
         return
     
-    # بلاک کردن کاربر توسط ادمین
     db.execute("INSERT OR REPLACE INTO admin_blocks (admin_id, blocked_user_id, reason, created_at) VALUES (?, ?, ?, ?)", 
-              (ADMIN_ID, user_id, "گزارش تخلف تایید شده", datetime.now()))
+              (ADMIN_ID, user_id, "گزارش تخلف", datetime.now()))
     
-    # بستن چت‌های فعال
     db.execute("UPDATE chats SET is_active=0 WHERE user1=? OR user2=?", (user_id, user_id))
-    
-    # بستن گزارش‌های این کاربر
     db.execute("UPDATE reports SET status='resolved' WHERE reported_id=? AND status='pending'", (user_id,))
     
-    # اطلاع به گزارش‌دهنده‌ها
     reports = db.fetchall("SELECT reporter_id FROM reports WHERE reported_id=? AND status='resolved'", (user_id,))
     for report in reports:
         try:
             await context.bot.send_message(
                 report['reporter_id'],
-                f"✅ **گزارش شما درباره کاربر `{user_id}` تایید شد!**\n\n"
-                f"این کاربر توسط مدیریت از ربات **بلاک** شد.\n"
-                f"از کمک شما به ما در حفظ امنیت متشکریم.",
+                f"✅ گزارش شما درباره کاربر `{user_id}` **تایید شد**!\nکاربر بلاک شد.",
                 parse_mode='Markdown'
             )
         except:
             pass
     
-    # اطلاع به کاربر بلاک شده
     try:
         await context.bot.send_message(
             user_id,
-            f"🚫 **شما توسط مدیریت از ربات مسدود شده‌اید!**\n\n"
-            f"دلیل: گزارش تخلف تایید شده\n"
-            f"در صورت اعتراض با پشتیبانی تماس بگیرید.",
-            parse_mode='Markdown'
+            f"🚫 شما توسط مدیریت بلاک شدید!\nدلیل: گزارش تخلف"
         )
     except:
         pass
     
-    await query.edit_message_text(
-        f"✅ **کاربر {user_id} بلاک و گزارش‌ها بسته شد!**\n\n"
-        f"گزارش‌دهنده‌ها مطلع شدند.",
-        parse_mode='Markdown',
-        reply_markup=admin_panel_keyboard()
-    )
+    await query.edit_message_text(f"✅ {user_id} بلاک شد!", reply_markup=admin_panel_keyboard())
 
 # ============ بقیه هندلرها ============
 async def view_requester(update: Update, context: ContextTypes.DEFAULT_TYPE):
@@ -1693,7 +1674,6 @@ async def back_to_menu(update: Update, context: ContextTypes.DEFAULT_TYPE):
     except:
         await query.message.reply_text("🏠 منو:", reply_markup=main_menu_keyboard(is_admin))
 
-# ============ منوها ============
 async def my_requests(update: Update, context: ContextTypes.DEFAULT_TYPE):
     query = update.callback_query
     await query.answer()
@@ -2084,7 +2064,7 @@ def main():
         application.add_handler(CallbackQueryHandler(report_user, pattern='^rp_'))
         application.add_handler(CallbackQueryHandler(report_reason, pattern='^rr_'))
         
-        # مدیریت گزارش توسط ادمین
+        # مدیریت گزارش
         application.add_handler(CallbackQueryHandler(admin_reject_report, pattern='^admin_reject_report_'))
         application.add_handler(CallbackQueryHandler(admin_block_from_report, pattern='^admin_block_from_report_'))
         
