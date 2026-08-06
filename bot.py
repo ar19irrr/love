@@ -4,19 +4,56 @@ import sqlite3
 import json
 import traceback
 import asyncio
+import threading
 from datetime import datetime, timedelta
 from typing import Optional, List, Dict, Any
 from telegram import Update, InlineKeyboardButton, InlineKeyboardMarkup
 from telegram.ext import Application, CommandHandler, CallbackQueryHandler, MessageHandler, filters, ContextTypes, ConversationHandler
+from flask import Flask, jsonify
 
 # ============ تنظیمات اولیه ============
 TOKEN = os.environ.get('TOKEN', "YOUR_BOT_TOKEN_HERE")
+PORT = int(os.environ.get('PORT', 8080))
 
 logging.basicConfig(
     format='%(asctime)s - %(name)s - %(levelname)s - %(message)s',
     level=logging.INFO
 )
 logger = logging.getLogger(__name__)
+
+# ============ Flask App ============
+web_app = Flask(__name__)
+
+@web_app.route('/')
+def home():
+    return jsonify({
+        "status": "Bot is running!",
+        "version": "1.0.0",
+        "time": datetime.now().isoformat()
+    })
+
+@web_app.route('/ping')
+def ping():
+    return jsonify({
+        "status": "pong",
+        "time": datetime.now().isoformat()
+    })
+
+@web_app.route('/health')
+def health():
+    return jsonify({
+        "status": "healthy",
+        "bot": "active",
+        "uptime": datetime.now().isoformat()
+    })
+
+def run_flask():
+    """اجرای Flask در یک ترد جداگانه"""
+    try:
+        logger.info(f"🌐 Starting Flask server on port {PORT}...")
+        web_app.run(host='0.0.0.0', port=PORT, debug=False, use_reloader=False)
+    except Exception as e:
+        logger.error(f"❌ Flask error: {e}")
 
 # ============ کلاس مدیریت دیتابیس ============
 class Database:
@@ -35,7 +72,6 @@ class Database:
         """ایجاد جداول مورد نیاز"""
         cursor = self.conn.cursor()
         
-        # جدول کاربران
         cursor.execute('''CREATE TABLE IF NOT EXISTS users (
             user_id INTEGER PRIMARY KEY,
             gender TEXT,
@@ -59,7 +95,6 @@ class Database:
             is_banned BOOLEAN DEFAULT 0
         )''')
         
-        # جدول درخواست‌ها
         cursor.execute('''CREATE TABLE IF NOT EXISTS requests (
             id INTEGER PRIMARY KEY AUTOINCREMENT,
             from_user INTEGER,
@@ -69,7 +104,6 @@ class Database:
             expires_at TIMESTAMP
         )''')
         
-        # جدول چت‌ها
         cursor.execute('''CREATE TABLE IF NOT EXISTS chats (
             id INTEGER PRIMARY KEY AUTOINCREMENT,
             user1 INTEGER,
@@ -81,7 +115,6 @@ class Database:
             last_message_at TIMESTAMP
         )''')
         
-        # جدول پیام‌ها
         cursor.execute('''CREATE TABLE IF NOT EXISTS messages (
             id INTEGER PRIMARY KEY AUTOINCREMENT,
             chat_id INTEGER,
@@ -93,7 +126,6 @@ class Database:
             is_read BOOLEAN DEFAULT 0
         )''')
         
-        # جدول رد شده‌ها
         cursor.execute('''CREATE TABLE IF NOT EXISTS rejected (
             user_id INTEGER,
             rejected_user_id INTEGER,
@@ -101,7 +133,6 @@ class Database:
             PRIMARY KEY (user_id, rejected_user_id)
         )''')
         
-        # جدول بلاک‌ها
         cursor.execute('''CREATE TABLE IF NOT EXISTS blocks (
             id INTEGER PRIMARY KEY AUTOINCREMENT,
             blocker_id INTEGER,
@@ -110,7 +141,6 @@ class Database:
             created_at TIMESTAMP
         )''')
         
-        # جدول گزارش‌ها
         cursor.execute('''CREATE TABLE IF NOT EXISTS reports (
             id INTEGER PRIMARY KEY AUTOINCREMENT,
             reporter_id INTEGER,
@@ -120,7 +150,6 @@ class Database:
             status TEXT DEFAULT 'pending'
         )''')
         
-        # ایندکس‌ها
         cursor.execute("CREATE INDEX IF NOT EXISTS idx_users_age ON users(age)")
         cursor.execute("CREATE INDEX IF NOT EXISTS idx_users_purpose ON users(purpose)")
         cursor.execute("CREATE INDEX IF NOT EXISTS idx_users_city ON users(city)")
@@ -146,7 +175,6 @@ class Database:
         logger.info("✅ Database initialized successfully!")
     
     def execute(self, query: str, params: tuple = None) -> sqlite3.Cursor:
-        """اجرای کوئری با مدیریت خطا"""
         try:
             cursor = self.conn.cursor()
             if params:
@@ -157,40 +185,29 @@ class Database:
             return cursor
         except sqlite3.Error as e:
             logger.error(f"Database error: {e}")
-            logger.error(f"Query: {query}")
             raise
     
     def fetchone(self, query: str, params: tuple = None) -> Optional[sqlite3.Row]:
-        """دریافت یک رکورد"""
         cursor = self.execute(query, params)
         return cursor.fetchone()
     
     def fetchall(self, query: str, params: tuple = None) -> List[sqlite3.Row]:
-        """دریافت همه رکوردها"""
         cursor = self.execute(query, params)
         return cursor.fetchall()
-    
-    def close(self):
-        """بستن اتصال دیتابیس"""
-        if self.conn:
-            self.conn.close()
 
 db = Database()
 
 # ============ توابع کمکی ============
 def get_user(user_id: int) -> Optional[sqlite3.Row]:
-    """دریافت اطلاعات کاربر"""
     return db.fetchone("SELECT * FROM users WHERE user_id=?", (user_id,))
 
 def get_user_dict(user_id: int) -> Optional[Dict[str, Any]]:
-    """دریافت اطلاعات کاربر به صورت دیکشنری"""
     user = get_user(user_id)
     if not user:
         return None
     return dict(user)
 
 def save_user(user_id: int, data: Dict[str, Any]):
-    """ذخیره یا بروزرسانی اطلاعات کاربر"""
     try:
         existing = get_user(user_id)
         if existing:
@@ -207,16 +224,7 @@ def save_user(user_id: int, data: Dict[str, Any]):
         logger.error(f"Error saving user {user_id}: {e}")
         return False
 
-def is_blocked(user_id: int, target_id: int) -> bool:
-    """بررسی اینکه آیا کاربر بلاک شده"""
-    result = db.fetchone("""
-        SELECT * FROM blocks 
-        WHERE (blocker_id=? AND blocked_id=?) OR (blocker_id=? AND blocked_id=?)
-    """, (user_id, target_id, target_id, user_id))
-    return result is not None
-
 def cleanup_expired_chats() -> int:
-    """غیرفعال کردن چت‌های منقضی شده"""
     try:
         cursor = db.execute("""
             UPDATE chats 
@@ -233,7 +241,6 @@ def cleanup_expired_chats() -> int:
         return 0
 
 def get_active_chats(user_id: int) -> List[sqlite3.Row]:
-    """دریافت لیست چت‌های فعال کاربر"""
     return db.fetchall("""
         SELECT id, user1, user2, last_message_at 
         FROM chats 
@@ -241,33 +248,8 @@ def get_active_chats(user_id: int) -> List[sqlite3.Row]:
         ORDER BY last_message_at DESC
     """, (user_id, user_id))
 
-def get_chat_partner(chat_id: int, user_id: int) -> Optional[int]:
-    """دریافت طرف مقابل در چت"""
-    chat = db.fetchone("SELECT user1, user2 FROM chats WHERE id=?", (chat_id,))
-    if not chat:
-        return None
-    return chat['user2'] if chat['user1'] == user_id else chat['user1']
-
-# ============ وضعیت‌های کاربر ============
-USER_STATE_IDLE = 0
-USER_STATE_REGISTERING = 1
-USER_STATE_CHATTING = 2
-USER_STATE_EDITING = 3
-
-def get_user_state(user_id: int) -> int:
-    """دریافت وضعیت فعلی کاربر"""
-    user = get_user(user_id)
-    if not user:
-        return USER_STATE_REGISTERING
-    if user['is_banned']:
-        return USER_STATE_IDLE
-    if not user['is_setup_complete']:
-        return USER_STATE_REGISTERING
-    return USER_STATE_IDLE
-
 # ============ کیبوردها ============
 def main_menu_keyboard():
-    """کیبورد منوی اصلی"""
     keyboard = [
         [InlineKeyboardButton("🔍 جستجو", callback_data="search")],
         [InlineKeyboardButton("💬 چت‌های من", callback_data="show_chats")],
@@ -281,7 +263,6 @@ def main_menu_keyboard():
     return InlineKeyboardMarkup(keyboard)
 
 def chat_keyboard(other_user: int):
-    """کیبورد داخل چت"""
     return InlineKeyboardMarkup([
         [InlineKeyboardButton("📸 درخواست عکس", callback_data=f"photo_{other_user}")],
         [InlineKeyboardButton("🚫 بلاک کردن", callback_data=f"block_{other_user}")],
@@ -289,154 +270,7 @@ def chat_keyboard(other_user: int):
         [InlineKeyboardButton("❌ بستن چت", callback_data="close_chat")]
     ])
 
-# ============ مراحل ثبت‌نام ============
-GENDER, AGE, PURPOSE, CITY, AGE_MIN, AGE_MAX, INTERESTS, JOB_STATUS, DESCRIPTION, PHOTO, PRIVACY = range(11)
-
-# ============ هندلرهای ثبت‌نام ============
-async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    """شروع ربات"""
-    user_id = update.effective_user.id
-    user = get_user(user_id)
-    
-    # بررسی بن بودن
-    if user and user['is_banned']:
-        await update.message.reply_text(
-            "🚫 شما توسط مدیریت مسدود شده‌اید!\n"
-            "برای اعتراض با پشتیبانی تماس بگیرید."
-        )
-        return
-    
-    if user and user['is_setup_complete']:
-        await update.message.reply_text(
-            f"🌟 به بات هم‌نوا خوش اومدی {update.effective_user.first_name}!\n\n"
-            "از منوی زیر استفاده کن:",
-            reply_markup=main_menu_keyboard()
-        )
-        return ConversationHandler.END
-    
-    # پاک کردن داده‌های قبلی
-    context.user_data.clear()
-    
-    await update.message.reply_text(
-        "🌟 به بات هم‌نوا خوش اومدی!\n\n"
-        "بیا اول با هم آشنا بشیم... 🎉\n\n"
-        "جنسیت خودت رو انتخاب کن:",
-        reply_markup=InlineKeyboardMarkup([
-            [InlineKeyboardButton("👨 مرد", callback_data="gender_male")],
-            [InlineKeyboardButton("👩 زن", callback_data="gender_female")],
-            [InlineKeyboardButton("🧑 سایر", callback_data="gender_other")]
-        ])
-    )
-    return GENDER
-
-async def gender_selection(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    """انتخاب جنسیت"""
-    query = update.callback_query
-    await query.answer()
-    
-    gender_map = {
-        "gender_male": "مرد",
-        "gender_female": "زن",
-        "gender_other": "سایر"
-    }
-    context.user_data['gender'] = gender_map[query.data]
-    
-    await query.edit_message_text(
-        "🌸 چند سالت هست؟\n"
-        "(مثلاً: ۲۵)\n"
-        "فقط عدد وارد کن:",
-        reply_markup=None
-    )
-    return AGE
-
-async def age_input(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    """ورود سن"""
-    try:
-        age = int(update.message.text)
-        if age < 10 or age > 100:
-            await update.message.reply_text("❌ لطفاً سن معتبر وارد کن (۱۰ تا ۱۰۰):")
-            return AGE
-        context.user_data['age'] = age
-    except ValueError:
-        await update.message.reply_text("❌ لطفاً فقط عدد وارد کن:")
-        return AGE
-    
-    await update.message.reply_text(
-        "🎯 هدف شما از حضور در این بات چیه؟",
-        reply_markup=InlineKeyboardMarkup([
-            [InlineKeyboardButton("💍 ازدواج", callback_data="purpose_marriage")],
-            [InlineKeyboardButton("💑 رابطه دوستی", callback_data="purpose_relationship")],
-            [InlineKeyboardButton("🎭 رفاقت ساده", callback_data="purpose_friendship")],
-            [InlineKeyboardButton("🤷 هنوز نمیدونم", callback_data="purpose_unknown")]
-        ])
-    )
-    return PURPOSE
-
-async def purpose_selection(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    """انتخاب هدف"""
-    query = update.callback_query
-    await query.answer()
-    
-    purpose_map = {
-        "purpose_marriage": "ازدواج",
-        "purpose_relationship": "دوستی",
-        "purpose_friendship": "رفاقت",
-        "purpose_unknown": "نمیدونم"
-    }
-    context.user_data['purpose'] = purpose_map[query.data]
-    
-    await query.edit_message_text(
-        "🏙️ کدوم شهر زندگی می‌کنی؟",
-        reply_markup=None
-    )
-    return CITY
-
-async def city_input(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    """ورود شهر"""
-    context.user_data['city'] = update.message.text
-    
-    await update.message.reply_text(
-        "📏 طرف مقابلت چند ساله باشه؟\n"
-        "از چند سال (حداقل):",
-        reply_markup=None
-    )
-    return AGE_MIN
-
-async def age_min_input(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    """ورود حداقل سن"""
-    try:
-        age_min = int(update.message.text)
-        if age_min < 10 or age_min > 100:
-            await update.message.reply_text("❌ لطفاً عدد معتبر وارد کن (۱۰ تا ۱۰۰):")
-            return AGE_MIN
-        context.user_data['age_min'] = age_min
-    except ValueError:
-        await update.message.reply_text("❌ لطفاً فقط عدد وارد کن:")
-        return AGE_MIN
-    
-    await update.message.reply_text(
-        "تا چند سال (حداکثر):",
-        reply_markup=None
-    )
-    return AGE_MAX
-
-async def age_max_input(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    """ورود حداکثر سن"""
-    try:
-        age_max = int(update.message.text)
-        if age_max < context.user_data['age_min'] or age_max > 100:
-            await update.message.reply_text(f"❌ باید بین {context.user_data['age_min']} تا ۱۰۰ باشه:")
-            return AGE_MAX
-        context.user_data['age_max'] = age_max
-    except ValueError:
-        await update.message.reply_text("❌ لطفاً فقط عدد وارد کن:")
-        return AGE_MAX
-    
-    await show_interests(update, context)
-    return INTERESTS
-
 def get_interests_keyboard(selected=None):
-    """کیبورد انتخاب علایق"""
     if selected is None:
         selected = []
     
@@ -460,8 +294,114 @@ def get_interests_keyboard(selected=None):
     keyboard.append([InlineKeyboardButton("✅ تموم شد", callback_data="interests_done")])
     return InlineKeyboardMarkup(keyboard)
 
+# ============ مراحل ثبت‌نام ============
+GENDER, AGE, PURPOSE, CITY, AGE_MIN, AGE_MAX, INTERESTS, JOB_STATUS, DESCRIPTION, PHOTO, PRIVACY = range(11)
+
+# ============ هندلرهای ثبت‌نام ============
+async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    user_id = update.effective_user.id
+    user = get_user(user_id)
+    
+    if user and user['is_banned']:
+        await update.message.reply_text("🚫 شما توسط مدیریت مسدود شده‌اید!")
+        return
+    
+    if user and user['is_setup_complete']:
+        await update.message.reply_text(
+            f"🌟 به بات هم‌نوا خوش اومدی {update.effective_user.first_name}!\n\nاز منوی زیر استفاده کن:",
+            reply_markup=main_menu_keyboard()
+        )
+        return ConversationHandler.END
+    
+    context.user_data.clear()
+    
+    await update.message.reply_text(
+        "🌟 به بات هم‌نوا خوش اومدی!\n\nبیا اول با هم آشنا بشیم... 🎉\n\nجنسیت خودت رو انتخاب کن:",
+        reply_markup=InlineKeyboardMarkup([
+            [InlineKeyboardButton("👨 مرد", callback_data="gender_male")],
+            [InlineKeyboardButton("👩 زن", callback_data="gender_female")],
+            [InlineKeyboardButton("🧑 سایر", callback_data="gender_other")]
+        ])
+    )
+    return GENDER
+
+async def gender_selection(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    query = update.callback_query
+    await query.answer()
+    
+    gender_map = {"gender_male": "مرد", "gender_female": "زن", "gender_other": "سایر"}
+    context.user_data['gender'] = gender_map[query.data]
+    
+    await query.edit_message_text("🌸 چند سالت هست؟\n(مثلاً: ۲۵)\nفقط عدد وارد کن:", reply_markup=None)
+    return AGE
+
+async def age_input(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    try:
+        age = int(update.message.text)
+        if age < 10 or age > 100:
+            await update.message.reply_text("❌ لطفاً سن معتبر وارد کن (۱۰ تا ۱۰۰):")
+            return AGE
+        context.user_data['age'] = age
+    except ValueError:
+        await update.message.reply_text("❌ لطفاً فقط عدد وارد کن:")
+        return AGE
+    
+    await update.message.reply_text(
+        "🎯 هدف شما از حضور در این بات چیه؟",
+        reply_markup=InlineKeyboardMarkup([
+            [InlineKeyboardButton("💍 ازدواج", callback_data="purpose_marriage")],
+            [InlineKeyboardButton("💑 رابطه دوستی", callback_data="purpose_relationship")],
+            [InlineKeyboardButton("🎭 رفاقت ساده", callback_data="purpose_friendship")],
+            [InlineKeyboardButton("🤷 هنوز نمیدونم", callback_data="purpose_unknown")]
+        ])
+    )
+    return PURPOSE
+
+async def purpose_selection(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    query = update.callback_query
+    await query.answer()
+    
+    purpose_map = {"purpose_marriage": "ازدواج", "purpose_relationship": "دوستی", "purpose_friendship": "رفاقت", "purpose_unknown": "نمیدونم"}
+    context.user_data['purpose'] = purpose_map[query.data]
+    
+    await query.edit_message_text("🏙️ کدوم شهر زندگی می‌کنی؟", reply_markup=None)
+    return CITY
+
+async def city_input(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    context.user_data['city'] = update.message.text
+    
+    await update.message.reply_text("📏 طرف مقابلت چند ساله باشه؟\nاز چند سال (حداقل):", reply_markup=None)
+    return AGE_MIN
+
+async def age_min_input(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    try:
+        age_min = int(update.message.text)
+        if age_min < 10 or age_min > 100:
+            await update.message.reply_text("❌ لطفاً عدد معتبر وارد کن (۱۰ تا ۱۰۰):")
+            return AGE_MIN
+        context.user_data['age_min'] = age_min
+    except ValueError:
+        await update.message.reply_text("❌ لطفاً فقط عدد وارد کن:")
+        return AGE_MIN
+    
+    await update.message.reply_text("تا چند سال (حداکثر):", reply_markup=None)
+    return AGE_MAX
+
+async def age_max_input(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    try:
+        age_max = int(update.message.text)
+        if age_max < context.user_data['age_min'] or age_max > 100:
+            await update.message.reply_text(f"❌ باید بین {context.user_data['age_min']} تا ۱۰۰ باشه:")
+            return AGE_MAX
+        context.user_data['age_max'] = age_max
+    except ValueError:
+        await update.message.reply_text("❌ لطفاً فقط عدد وارد کن:")
+        return AGE_MAX
+    
+    await show_interests(update, context)
+    return INTERESTS
+
 async def show_interests(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    """نمایش صفحه انتخاب علایق"""
     if 'interests' not in context.user_data:
         context.user_data['interests'] = []
     
@@ -471,18 +411,11 @@ async def show_interests(update: Update, context: ContextTypes.DEFAULT_TYPE):
     
     if isinstance(update, Update) and update.callback_query:
         query = update.callback_query
-        await query.edit_message_text(
-            text,
-            reply_markup=get_interests_keyboard(context.user_data['interests'])
-        )
+        await query.edit_message_text(text, reply_markup=get_interests_keyboard(context.user_data['interests']))
     else:
-        await update.message.reply_text(
-            text,
-            reply_markup=get_interests_keyboard(context.user_data['interests'])
-        )
+        await update.message.reply_text(text, reply_markup=get_interests_keyboard(context.user_data['interests']))
 
 async def interests_selection(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    """انتخاب علایق"""
     query = update.callback_query
     await query.answer()
     
@@ -491,10 +424,7 @@ async def interests_selection(update: Update, context: ContextTypes.DEFAULT_TYPE
     
     if query.data == "interests_done":
         if not context.user_data['interests']:
-            await query.edit_message_text(
-                "❌ حداقل یک علاقه انتخاب کن!",
-                reply_markup=None
-            )
+            await query.edit_message_text("❌ حداقل یک علاقه انتخاب کن!", reply_markup=None)
             await show_interests(update, context)
             return INTERESTS
         
@@ -514,10 +444,7 @@ async def interests_selection(update: Update, context: ContextTypes.DEFAULT_TYPE
         context.user_data['interests'].remove(interest)
     else:
         if len(context.user_data['interests']) >= 5:
-            await query.edit_message_text(
-                "❌ حداکثر ۵ علاقه می‌تونی انتخاب کنی!",
-                reply_markup=None
-            )
+            await query.edit_message_text("❌ حداکثر ۵ علاقه می‌تونی انتخاب کنی!", reply_markup=None)
             await show_interests(update, context)
             return INTERESTS
         context.user_data['interests'].append(interest)
@@ -526,29 +453,19 @@ async def interests_selection(update: Update, context: ContextTypes.DEFAULT_TYPE
     return INTERESTS
 
 async def job_status_selection(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    """انتخاب وضعیت شغلی"""
     query = update.callback_query
     await query.answer()
     
-    job_map = {
-        "job_student": "دانشجو",
-        "job_employed": "شاغل",
-        "job_seeking": "جویای کار",
-        "job_home": "خانه‌دار"
-    }
+    job_map = {"job_student": "دانشجو", "job_employed": "شاغل", "job_seeking": "جویای کار", "job_home": "خانه‌دار"}
     context.user_data['job_status'] = job_map[query.data]
     
     await query.edit_message_text(
-        "📝 یه توضیح کوتاه از خودت بنویس (حداکثر ۲۰۰ کاراکتر)\n"
-        "اگه دوست نداری، 'رد شدن' رو بزن:",
-        reply_markup=InlineKeyboardMarkup([
-            [InlineKeyboardButton("⏭️ رد شدن", callback_data="description_skip")]
-        ])
+        "📝 یه توضیح کوتاه از خودت بنویس (حداکثر ۲۰۰ کاراکتر)\nاگه دوست نداری، 'رد شدن' رو بزن:",
+        reply_markup=InlineKeyboardMarkup([[InlineKeyboardButton("⏭️ رد شدن", callback_data="description_skip")]])
     )
     return DESCRIPTION
 
 async def description_input(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    """ورود توضیحات"""
     text = update.message.text
     if len(text) > 200:
         await update.message.reply_text("❌ حداکثر ۲۰۰ کاراکتر! کوتاه‌تر بنویس:")
@@ -556,59 +473,40 @@ async def description_input(update: Update, context: ContextTypes.DEFAULT_TYPE):
     context.user_data['description'] = text
     
     await update.message.reply_text(
-        "📸 حالا عکس پروفایل خودت رو بفرست.\n\n"
-        "این عکس وقتی کسی درخواست عکس بده، براش ارسال میشه.\n"
-        "اگه عکس نفرستی، عکس پروفایل تلگرامت استفاده میشه.\n\n"
-        "📤 عکس رو بفرست یا دکمه 'رد شدن' رو بزن:",
-        reply_markup=InlineKeyboardMarkup([
-            [InlineKeyboardButton("⏭️ رد شدن", callback_data="skip_photo")]
-        ])
+        "📸 حالا عکس پروفایل خودت رو بفرست.\n\nاین عکس وقتی کسی درخواست عکس بده، براش ارسال میشه.\nاگه عکس نفرستی، عکس پروفایل تلگرامت استفاده میشه.\n\n📤 عکس رو بفرست یا دکمه 'رد شدن' رو بزن:",
+        reply_markup=InlineKeyboardMarkup([[InlineKeyboardButton("⏭️ رد شدن", callback_data="skip_photo")]])
     )
     return PHOTO
 
 async def description_skip(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    """رد شدن از توضیحات"""
     query = update.callback_query
     await query.answer()
     context.user_data['description'] = ""
     
     await query.edit_message_text(
-        "📸 حالا عکس پروفایل خودت رو بفرست.\n\n"
-        "این عکس وقتی کسی درخواست عکس بده، براش ارسال میشه.\n"
-        "اگه عکس نفرستی، عکس پروفایل تلگرامت استفاده میشه.\n\n"
-        "📤 عکس رو بفرست یا دکمه 'رد شدن' رو بزن:",
-        reply_markup=InlineKeyboardMarkup([
-            [InlineKeyboardButton("⏭️ رد شدن", callback_data="skip_photo")]
-        ])
+        "📸 حالا عکس پروفایل خودت رو بفرست.\n\nاین عکس وقتی کسی درخواست عکس بده، براش ارسال میشه.\nاگه عکس نفرستی، عکس پروفایل تلگرامت استفاده میشه.\n\n📤 عکس رو بفرست یا دکمه 'رد شدن' رو بزن:",
+        reply_markup=InlineKeyboardMarkup([[InlineKeyboardButton("⏭️ رد شدن", callback_data="skip_photo")]])
     )
     return PHOTO
 
 async def handle_photo_upload(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    """آپلود عکس"""
     if update.message.photo:
         photo_file = update.message.photo[-1]
-        file_id = photo_file.file_id
-        
-        context.user_data['photo'] = file_id
+        context.user_data['photo'] = photo_file.file_id
         
         await update.message.reply_text(
             "✅ عکس شما با موفقیت ذخیره شد!",
-            reply_markup=InlineKeyboardMarkup([
-                [InlineKeyboardButton("✅ ادامه", callback_data="photo_done")]
-            ])
+            reply_markup=InlineKeyboardMarkup([[InlineKeyboardButton("✅ ادامه", callback_data="photo_done")]])
         )
         return PHOTO
     else:
         await update.message.reply_text(
             "❌ لطفاً یک عکس بفرست!",
-            reply_markup=InlineKeyboardMarkup([
-                [InlineKeyboardButton("⏭️ رد شدن", callback_data="skip_photo")]
-            ])
+            reply_markup=InlineKeyboardMarkup([[InlineKeyboardButton("⏭️ رد شدن", callback_data="skip_photo")]])
         )
         return PHOTO
 
 async def skip_photo(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    """رد شدن از عکس"""
     query = update.callback_query
     await query.answer()
     context.user_data['photo'] = None
@@ -617,30 +515,19 @@ async def skip_photo(update: Update, context: ContextTypes.DEFAULT_TYPE):
     return PRIVACY
 
 async def photo_done(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    """تایید عکس"""
     query = update.callback_query
     await query.answer()
-    
     await show_privacy_settings(update, context)
     return PRIVACY
 
 async def show_privacy_settings(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    """نمایش تنظیمات حریم خصوصی"""
     if 'privacy' not in context.user_data:
-        context.user_data['privacy'] = {
-            'show_age': True,
-            'show_city': True,
-            'visibility': 'all'
-        }
+        context.user_data['privacy'] = {'show_age': True, 'show_city': True, 'visibility': 'all'}
     
     age_status = "✅" if context.user_data['privacy']['show_age'] else "❌"
     city_status = "✅" if context.user_data['privacy']['show_city'] else "❌"
     
-    visibility_text = {
-        'all': '🌍 همه',
-        'same_city': '🏙️ همشهری‌ها',
-        'none': '❌ هیچکس'
-    }[context.user_data['privacy']['visibility']]
+    visibility_text = {'all': '🌍 همه', 'same_city': '🏙️ همشهری‌ها', 'none': '❌ هیچکس'}[context.user_data['privacy']['visibility']]
     
     keyboard = [
         [InlineKeyboardButton(f"{age_status} نمایش سن", callback_data="toggle_age")],
@@ -652,50 +539,38 @@ async def show_privacy_settings(update: Update, context: ContextTypes.DEFAULT_TY
     if isinstance(update, Update) and update.callback_query:
         query = update.callback_query
         await query.edit_message_text(
-            "🔒 تنظیمات حریم خصوصی:\n\n"
-            "روی هر گزینه بزن تا تغییر کنه:\n"
-            "✅ = نمایش داده میشه\n"
-            "❌ = نمایش داده نمیشه",
+            "🔒 تنظیمات حریم خصوصی:\n\nروی هر گزینه بزن تا تغییر کنه:\n✅ = نمایش داده میشه\n❌ = نمایش داده نمیشه",
             reply_markup=InlineKeyboardMarkup(keyboard)
         )
     else:
         await update.message.reply_text(
-            "🔒 تنظیمات حریم خصوصی:\n\n"
-            "روی هر گزینه بزن تا تغییر کنه:\n"
-            "✅ = نمایش داده میشه\n"
-            "❌ = نمایش داده نمیشه",
+            "🔒 تنظیمات حریم خصوصی:\n\nروی هر گزینه بزن تا تغییر کنه:\n✅ = نمایش داده میشه\n❌ = نمایش داده نمیشه",
             reply_markup=InlineKeyboardMarkup(keyboard)
         )
 
 async def privacy_selection(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    """انتخاب تنظیمات حریم خصوصی"""
     query = update.callback_query
     await query.answer()
     
     if query.data == "toggle_age":
         context.user_data['privacy']['show_age'] = not context.user_data['privacy']['show_age']
         await show_privacy_settings(update, context)
-    
     elif query.data == "toggle_city":
         context.user_data['privacy']['show_city'] = not context.user_data['privacy']['show_city']
         await show_privacy_settings(update, context)
-    
     elif query.data == "change_visibility":
         visibility_options = ['all', 'same_city', 'none']
         current = context.user_data['privacy']['visibility']
         next_index = (visibility_options.index(current) + 1) % len(visibility_options)
         context.user_data['privacy']['visibility'] = visibility_options[next_index]
         await show_privacy_settings(update, context)
-    
     elif query.data == "privacy_done":
         await finish_registration(update, context)
         return PRIVACY
 
 async def finish_registration(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    """پایان ثبت‌نام"""
     user_id = update.effective_user.id
     
-    # دریافت عکس از تلگرام اگر آپلود نشده
     if 'photo' not in context.user_data or not context.user_data['photo']:
         try:
             user_photos = await context.bot.get_user_profile_photos(user_id, limit=1)
@@ -729,33 +604,26 @@ async def finish_registration(update: Update, context: ContextTypes.DEFAULT_TYPE
     }
     
     if save_user(user_id, user_data):
-        # پاک کردن داده‌های موقت
         context.user_data.clear()
         
         if isinstance(update, Update) and update.callback_query:
             query = update.callback_query
             await query.edit_message_text(
-                "🎉 ثبت‌نام شما کامل شد!\n\n"
-                "حالا می‌تونی از امکانات ربات استفاده کنی:",
+                "🎉 ثبت‌نام شما کامل شد!\n\nحالا می‌تونی از امکانات ربات استفاده کنی:",
                 reply_markup=main_menu_keyboard()
             )
         else:
             await update.message.reply_text(
-                "🎉 ثبت‌نام شما کامل شد!\n\n"
-                "حالا می‌تونی از امکانات ربات استفاده کنی:",
+                "🎉 ثبت‌نام شما کامل شد!\n\nحالا می‌تونی از امکانات ربات استفاده کنی:",
                 reply_markup=main_menu_keyboard()
             )
     else:
-        await update.message.reply_text(
-            "❌ خطا در ذخیره اطلاعات! لطفاً دوباره تلاش کن.",
-            reply_markup=main_menu_keyboard()
-        )
+        await update.message.reply_text("❌ خطا در ذخیره اطلاعات! لطفاً دوباره تلاش کن.", reply_markup=main_menu_keyboard())
     
     return ConversationHandler.END
 
 # ============ منوها و جستجو ============
 async def search(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    """جستجوی کاربران"""
     query = update.callback_query
     await query.answer()
     
@@ -763,46 +631,32 @@ async def search(update: Update, context: ContextTypes.DEFAULT_TYPE):
     user = get_user_dict(user_id)
     
     if not user or not user['is_setup_complete']:
-        await query.edit_message_text(
-            "❌ اول باید ثبت‌نام کامل کنی!",
-            reply_markup=main_menu_keyboard()
-        )
+        await query.edit_message_text("❌ اول باید ثبت‌نام کامل کنی!", reply_markup=main_menu_keyboard())
         return
     
     if user['is_banned']:
-        await query.edit_message_text(
-            "🚫 شما توسط مدیریت مسدود شده‌اید!",
-            reply_markup=main_menu_keyboard()
-        )
+        await query.edit_message_text("🚫 شما توسط مدیریت مسدود شده‌اید!", reply_markup=main_menu_keyboard())
         return
     
-    # پاکسازی چت‌های منقضی شده
     cleanup_expired_chats()
     
     try:
-        # دریافت لیست رد شده‌ها
         week_ago = datetime.now() - timedelta(days=7)
-        rejected = db.fetchall(
-            "SELECT rejected_user_id FROM rejected WHERE user_id=? AND rejected_at > ?",
-            (user_id, week_ago)
-        )
+        rejected = db.fetchall("SELECT rejected_user_id FROM rejected WHERE user_id=? AND rejected_at > ?", (user_id, week_ago))
         rejected_ids = [row['rejected_user_id'] for row in rejected]
         
-        # دریافت چت‌های فعال
         active_chats = db.fetchall(
             "SELECT user2 FROM chats WHERE user1=? AND is_active=1 UNION SELECT user1 FROM chats WHERE user2=? AND is_active=1",
             (user_id, user_id)
         )
         active_ids = [row[0] for row in active_chats]
         
-        # دریافت کاربران بلاک شده
         blocked = db.fetchall(
             "SELECT blocked_id FROM blocks WHERE blocker_id=? UNION SELECT blocker_id FROM blocks WHERE blocked_id=?",
             (user_id, user_id)
         )
         blocked_ids = [row[0] for row in blocked]
         
-        # ساخت کوئری جستجو
         query_str = """
             SELECT * FROM users 
             WHERE user_id != ? 
@@ -832,26 +686,20 @@ async def search(update: Update, context: ContextTypes.DEFAULT_TYPE):
         
         if not candidates:
             await query.edit_message_text(
-                "😔 متاسفانه کسی با معیارهای شما پیدا نشد!\n"
-                "سعی کن فیلترها رو عوض کنی یا بعداً دوباره امتحان کن.",
+                "😔 متاسفانه کسی با معیارهای شما پیدا نشد!\nسعی کن فیلترها رو عوض کنی یا بعداً دوباره امتحان کن.",
                 reply_markup=main_menu_keyboard()
             )
             return
         
         context.user_data['candidates'] = candidates
         context.user_data['candidate_index'] = 0
-        
         await show_candidate(update, context)
         
     except Exception as e:
         logger.error(f"Error in search: {e}")
-        await query.edit_message_text(
-            "❌ خطا در جستجو! لطفاً دوباره تلاش کن.",
-            reply_markup=main_menu_keyboard()
-        )
+        await query.edit_message_text("❌ خطا در جستجو! لطفاً دوباره تلاش کن.", reply_markup=main_menu_keyboard())
 
 async def show_candidate(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    """نمایش یک کاندید"""
     query = update.callback_query
     await query.answer()
     
@@ -859,12 +707,9 @@ async def show_candidate(update: Update, context: ContextTypes.DEFAULT_TYPE):
     index = context.user_data.get('candidate_index', 0)
     
     if index >= len(candidates):
-        await query.edit_message_text(
-            "🎯 جستجو به پایان رسید!\n"
-            "می‌تونی دوباره جستجو کنی.",
-            reply_markup=main_menu_keyboard()
-        )
-        return    
+        await query.edit_message_text("🎯 جستجو به پایان رسید!\nمی‌تونی دوباره جستجو کنی.", reply_markup=main_menu_keyboard())
+        return
+    
     candidate = candidates[index]
     user_dict = dict(candidate)
     
@@ -874,7 +719,6 @@ async def show_candidate(update: Update, context: ContextTypes.DEFAULT_TYPE):
     message += f"هدف: {user_dict['purpose']}\n"
     message += f"وضعیت: {user_dict['job_status']}\n"
     
-    # نمایش علایق
     interests = json.loads(user_dict['interests']) if user_dict['interests'] else []
     if interests:
         message += f"🎨 علایق: {', '.join(interests[:3])}"
@@ -888,14 +732,10 @@ async def show_candidate(update: Update, context: ContextTypes.DEFAULT_TYPE):
         [InlineKeyboardButton("⏩ بعدی", callback_data="next_candidate")]
     ]
     
-    await query.edit_message_text(
-        message,
-        reply_markup=InlineKeyboardMarkup(keyboard)
-    )
+    await query.edit_message_text(message, reply_markup=InlineKeyboardMarkup(keyboard))
 
 # ============ مدیریت درخواست‌ها ============
 async def candidate_action(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    """عملیات روی کاندید"""
     query = update.callback_query
     await query.answer()
     
@@ -915,11 +755,7 @@ async def candidate_action(update: Update, context: ContextTypes.DEFAULT_TYPE):
     
     if action == "like":
         try:
-            # بررسی درخواست تکراری
-            existing = db.fetchone(
-                "SELECT * FROM requests WHERE from_user=? AND to_user=? AND status='pending'",
-                (user_id, target_id)
-            )
+            existing = db.fetchone("SELECT * FROM requests WHERE from_user=? AND to_user=? AND status='pending'", (user_id, target_id))
             
             if not existing:
                 db.execute("""
@@ -927,14 +763,12 @@ async def candidate_action(update: Update, context: ContextTypes.DEFAULT_TYPE):
                     VALUES (?, ?, ?, ?)
                 """, (user_id, target_id, datetime.now(), datetime.now() + timedelta(days=3)))
                 
-                # ارسال اعلان به طرف مقابل
                 try:
                     target_user = get_user_dict(target_id)
                     if target_user:
                         await context.bot.send_message(
                             target_id,
-                            f"📩 یه نفر به شما علاقه نشان داد!\n"
-                            f"می‌خواید پروفایلش رو ببینید؟",
+                            f"📩 یه نفر به شما علاقه نشان داد!\nمی‌خواید پروفایلش رو ببینید؟",
                             reply_markup=InlineKeyboardMarkup([
                                 [InlineKeyboardButton("👀 مشاهده پروفایل", callback_data=f"view_{user_id}")],
                                 [InlineKeyboardButton("✅ تایید", callback_data=f"accept_{user_id}")],
@@ -944,38 +778,22 @@ async def candidate_action(update: Update, context: ContextTypes.DEFAULT_TYPE):
                 except Exception as e:
                     logger.error(f"Error sending request notification: {e}")
             
-            await query.edit_message_text(
-                "✅ درخواست شما ارسال شد!\n"
-                "منتظر پاسخ طرف مقابل می‌مونیم... ⏳",
-                reply_markup=main_menu_keyboard()
-            )
+            await query.edit_message_text("✅ درخواست شما ارسال شد!\nمنتظر پاسخ طرف مقابل می‌مونیم... ⏳", reply_markup=main_menu_keyboard())
             
         except Exception as e:
             logger.error(f"Error in like action: {e}")
-            await query.edit_message_text(
-                "❌ خطا در ارسال درخواست!",
-                reply_markup=main_menu_keyboard()
-            )
+            await query.edit_message_text("❌ خطا در ارسال درخواست!", reply_markup=main_menu_keyboard())
     
     elif action == "dislike":
         try:
-            db.execute("""
-                INSERT OR REPLACE INTO rejected (user_id, rejected_user_id, rejected_at)
-                VALUES (?, ?, ?)
-            """, (user_id, target_id, datetime.now()))
-            
+            db.execute("INSERT OR REPLACE INTO rejected (user_id, rejected_user_id, rejected_at) VALUES (?, ?, ?)", (user_id, target_id, datetime.now()))
             await query.edit_message_text("✅ رد شد!", reply_markup=None)
-            
             if 'candidate_index' in context.user_data:
                 context.user_data['candidate_index'] += 1
             await show_candidate(update, context)
-            
         except Exception as e:
             logger.error(f"Error in dislike action: {e}")
-            await query.edit_message_text(
-                "❌ خطا در رد کردن!",
-                reply_markup=main_menu_keyboard()
-            )
+            await query.edit_message_text("❌ خطا در رد کردن!", reply_markup=main_menu_keyboard())
     
     elif action == "more":
         target_user = get_user_dict(target_id)
@@ -990,20 +808,16 @@ async def candidate_action(update: Update, context: ContextTypes.DEFAULT_TYPE):
             
             await query.edit_message_text(
                 message,
-                reply_markup=InlineKeyboardMarkup([
-                    [InlineKeyboardButton("🔙 برگشت به پروفایل", callback_data=f"back_{target_id}")]
-                ])
+                reply_markup=InlineKeyboardMarkup([[InlineKeyboardButton("🔙 برگشت به پروفایل", callback_data=f"back_{target_id}")]])
             )
 
 async def view_requester(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    """مشاهده درخواست‌دهنده"""
     query = update.callback_query
     await query.answer()
     
     try:
         requester_id = int(query.data.split('_')[1])
-    except Exception as e:
-        logger.error(f"Error in view_requester: {e}")
+    except:
         await query.edit_message_text("❌ خطا در پردازش!", reply_markup=main_menu_keyboard())
         return
     
@@ -1041,16 +855,12 @@ async def view_requester(update: Update, context: ContextTypes.DEFAULT_TYPE):
                 reply_markup=InlineKeyboardMarkup(keyboard)
             )
             return
-        except Exception as e:
-            logger.error(f"Error sending photo: {e}")
+        except:
+            pass
     
-    await query.edit_message_text(
-        message,
-        reply_markup=InlineKeyboardMarkup(keyboard)
-    )
+    await query.edit_message_text(message, reply_markup=InlineKeyboardMarkup(keyboard))
 
 async def handle_request(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    """پاسخ به درخواست"""
     query = update.callback_query
     await query.answer()
     
@@ -1061,44 +871,29 @@ async def handle_request(update: Update, context: ContextTypes.DEFAULT_TYPE):
             return
         action = parts[0]
         user_id = int(parts[1])
-    except Exception as e:
-        logger.error(f"Error in handle_request: {e}")
+    except:
         await query.edit_message_text("❌ خطا در پردازش!", reply_markup=main_menu_keyboard())
         return
     
     current_user = update.effective_user.id
     
     try:
-        # بررسی وجود درخواست
-        request = db.fetchone(
-            "SELECT * FROM requests WHERE from_user=? AND to_user=? AND status='pending'",
-            (user_id, current_user)
-        )
+        request = db.fetchone("SELECT * FROM requests WHERE from_user=? AND to_user=? AND status='pending'", (user_id, current_user))
         
         if not request:
-            await query.edit_message_text(
-                "❌ این درخواست وجود ندارد یا قبلاً پاسخ داده شده!",
-                reply_markup=main_menu_keyboard()
-            )
+            await query.edit_message_text("❌ این درخواست وجود ندارد یا قبلاً پاسخ داده شده!", reply_markup=main_menu_keyboard())
             return
         
         if action == "accept":
-            # بروزرسانی وضعیت درخواست
-            db.execute("""
-                UPDATE requests SET status='accepted' 
-                WHERE from_user=? AND to_user=? AND status='pending'
-            """, (user_id, current_user))
+            db.execute("UPDATE requests SET status='accepted' WHERE from_user=? AND to_user=? AND status='pending'", (user_id, current_user))
             
-            # ایجاد چت جدید
             db.execute("""
                 INSERT INTO chats (user1, user2, match_date, expiry_date, last_message_at)
                 VALUES (?, ?, ?, ?, ?)
-            """, (user_id, current_user, datetime.now(), 
-                  datetime.now() + timedelta(days=3), datetime.now()))
+            """, (user_id, current_user, datetime.now(), datetime.now() + timedelta(days=3), datetime.now()))
             
             chat_id = db.execute("SELECT last_insert_rowid()").fetchone()[0]
             
-            # ارسال قوانین چت
             chat_rules = (
                 "📋 **قوانین چت در بات هم‌نوا**\n\n"
                 "🔒 **حریم خصوصی:**\n"
@@ -1117,72 +912,49 @@ async def handle_request(update: Update, context: ContextTypes.DEFAULT_TYPE):
                 "✨ امیدواریم لحظات خوبی را در کنار هم تجربه کنید. ✨"
             )
             
-            # ارسال به هر دو طرف
             for user in [user_id, current_user]:
                 try:
                     await context.bot.send_message(
                         user,
                         chat_rules,
                         parse_mode='Markdown',
-                        reply_markup=InlineKeyboardMarkup([
-                            [InlineKeyboardButton("💬 شروع چت", callback_data=f"chat_{chat_id}")]
-                        ])
+                        reply_markup=InlineKeyboardMarkup([[InlineKeyboardButton("💬 شروع چت", callback_data=f"chat_{chat_id}")]])
                     )
                 except Exception as e:
                     logger.error(f"Error sending rules to user {user}: {e}")
             
             await query.edit_message_text(
-                "🎉 هورا! شما همدیگرو پسندیدین!\n\n"
-                "📋 یک پیام حاوی قوانین چت برای شما ارسال شد.\n"
-                "لطفاً قبل از شروع چت، آن را با دقت مطالعه کنید.",
+                "🎉 هورا! شما همدیگرو پسندیدین!\n\n📋 یک پیام حاوی قوانین چت برای شما ارسال شد.\nلطفاً قبل از شروع چت، آن را با دقت مطالعه کنید.",
                 reply_markup=main_menu_keyboard()
             )
         
         elif action == "reject":
-            db.execute("""
-                UPDATE requests SET status='rejected' 
-                WHERE from_user=? AND to_user=? AND status='pending'
-            """, (user_id, current_user))
+            db.execute("UPDATE requests SET status='rejected' WHERE from_user=? AND to_user=? AND status='pending'", (user_id, current_user))
             
             try:
-                await context.bot.send_message(
-                    user_id,
-                    "😔 متاسفانه طرف مقابل درخواست شما رو رد کرد!",
-                    reply_markup=main_menu_keyboard()
-                )
-            except Exception as e:
-                logger.error(f"Error notifying rejection: {e}")
+                await context.bot.send_message(user_id, "😔 متاسفانه طرف مقابل درخواست شما رو رد کرد!", reply_markup=main_menu_keyboard())
+            except:
+                pass
             
-            await query.edit_message_text(
-                "🙅 درخواست رد شد!",
-                reply_markup=main_menu_keyboard()
-            )
+            await query.edit_message_text("🙅 درخواست رد شد!", reply_markup=main_menu_keyboard())
             
     except Exception as e:
         logger.error(f"Error in handle_request: {e}")
-        await query.edit_message_text(
-            "❌ خطا در پردازش درخواست!",
-            reply_markup=main_menu_keyboard()
-        )
+        await query.edit_message_text("❌ خطا در پردازش درخواست!", reply_markup=main_menu_keyboard())
 
 # ============ مدیریت چت ============
 async def start_chat(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    """شروع چت"""
     query = update.callback_query
     await query.answer()
     
     try:
         chat_id = int(query.data.split('_')[1])
-    except Exception as e:
-        logger.error(f"Error in start_chat: {e}")
+    except:
         await query.edit_message_text("❌ خطا در پردازش!", reply_markup=main_menu_keyboard())
         return
     
     try:
-        chat = db.fetchone(
-            "SELECT user1, user2, is_active, blocked_by FROM chats WHERE id=?",
-            (chat_id,)
-        )
+        chat = db.fetchone("SELECT user1, user2, is_active, blocked_by FROM chats WHERE id=?", (chat_id,))
         
         if not chat or not chat['is_active']:
             await query.edit_message_text("❌ این چت فعال نیست!", reply_markup=main_menu_keyboard())
@@ -1191,10 +963,7 @@ async def start_chat(update: Update, context: ContextTypes.DEFAULT_TYPE):
         current_user = update.effective_user.id
         
         if chat['blocked_by'] and chat['blocked_by'] != current_user:
-            await query.edit_message_text(
-                "🚫 شما توسط طرف مقابل بلاک شده‌اید!",
-                reply_markup=main_menu_keyboard()
-            )
+            await query.edit_message_text("🚫 شما توسط طرف مقابل بلاک شده‌اید!", reply_markup=main_menu_keyboard())
             return
         
         if current_user not in [chat['user1'], chat['user2']]:
@@ -1203,17 +972,12 @@ async def start_chat(update: Update, context: ContextTypes.DEFAULT_TYPE):
         
         other_user = chat['user2'] if chat['user1'] == current_user else chat['user1']
         
-        # پاک کردن داده‌های قبلی
         context.user_data.clear()
-        
-        # تنظیم داده‌های چت
         context.user_data['active_chat'] = chat_id
         context.user_data['chat_partner'] = other_user
         
         await query.message.reply_text(
-            "💬 چت شروع شد!\n\n"
-            "📝 می‌تونی پیام، عکس، استیکر، گیف، ویدیو، ویس و آهنگ بفرستی.\n"
-            "📌 برای بستن چت یا بلاک کردن از دکمه‌های زیر استفاده کن.",
+            "💬 چت شروع شد!\n\n📝 می‌تونی پیام، عکس، استیکر، گیف، ویدیو، ویس و آهنگ بفرستی.\n📌 برای بستن چت یا بلاک کردن از دکمه‌های زیر استفاده کن.",
             reply_markup=chat_keyboard(other_user)
         )
         
@@ -1224,28 +988,19 @@ async def start_chat(update: Update, context: ContextTypes.DEFAULT_TYPE):
             
     except Exception as e:
         logger.error(f"Error in start_chat: {e}")
-        await query.edit_message_text(
-            "❌ خطا در شروع چت!",
-            reply_markup=main_menu_keyboard()
-        )
+        await query.edit_message_text("❌ خطا در شروع چت!", reply_markup=main_menu_keyboard())
 
 async def show_chats(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    """نمایش لیست چت‌های فعال"""
     query = update.callback_query
     await query.answer()
     
     user_id = update.effective_user.id
-    
-    # پاکسازی چت‌های منقضی
     cleanup_expired_chats()
     
     chats = get_active_chats(user_id)
     
     if not chats:
-        await query.edit_message_text(
-            "❌ شما هیچ چت فعالی ندارید!",
-            reply_markup=main_menu_keyboard()
-        )
+        await query.edit_message_text("❌ شما هیچ چت فعالی ندارید!", reply_markup=main_menu_keyboard())
         return
     
     keyboard = []
@@ -1254,36 +1009,23 @@ async def show_chats(update: Update, context: ContextTypes.DEFAULT_TYPE):
         other = get_user_dict(other_user)
         if other:
             last_msg = f" - آخرین پیام: {chat['last_message_at'][:16]}" if chat['last_message_at'] else ""
-            keyboard.append([
-                InlineKeyboardButton(
-                    f"💬 {other['gender']} {other['age']}ساله{last_msg}",
-                    callback_data=f"switch_chat_{chat['id']}"
-                )
-            ])
+            keyboard.append([InlineKeyboardButton(f"💬 {other['gender']} {other['age']}ساله{last_msg}", callback_data=f"switch_chat_{chat['id']}")])
     
     keyboard.append([InlineKeyboardButton("🔙 برگشت به منو", callback_data="back_to_menu")])
     
-    await query.edit_message_text(
-        "📋 لیست چت‌های فعال شما:",
-        reply_markup=InlineKeyboardMarkup(keyboard)
-    )
+    await query.edit_message_text("📋 لیست چت‌های فعال شما:", reply_markup=InlineKeyboardMarkup(keyboard))
 
 async def switch_chat(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    """تغییر به چت انتخاب شده"""
     query = update.callback_query
     await query.answer()
     
     try:
         chat_id = int(query.data.replace("switch_chat_", ""))
-    except Exception as e:
-        logger.error(f"Error in switch_chat: {e}")
+    except:
         await query.edit_message_text("❌ خطا در پردازش!", reply_markup=main_menu_keyboard())
         return
     
-    chat = db.fetchone(
-        "SELECT user1, user2, is_active, blocked_by FROM chats WHERE id=?",
-        (chat_id,)
-    )
+    chat = db.fetchone("SELECT user1, user2, is_active, blocked_by FROM chats WHERE id=?", (chat_id,))
     
     if not chat or not chat['is_active']:
         await query.edit_message_text("❌ این چت فعال نیست!", reply_markup=main_menu_keyboard())
@@ -1295,44 +1037,30 @@ async def switch_chat(update: Update, context: ContextTypes.DEFAULT_TYPE):
     context.user_data['active_chat'] = chat_id
     context.user_data['chat_partner'] = other_user
     
-    await query.edit_message_text(
-        f"✅切换到 چت",
-        reply_markup=chat_keyboard(other_user)
-    )
+    await query.edit_message_text("✅切换到 چت", reply_markup=chat_keyboard(other_user))
 
 async def handle_chat_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    """هندلر اصلی پیام‌های چت"""
     if not update.message:
         return
     
     user_id = update.effective_user.id
-    
-    # بررسی اینکه کاربر در حال ثبت‌نام یا ویرایش نیست
     user = get_user(user_id)
+    
     if user and not user['is_setup_complete']:
         return
     
     if 'editing_field' in context.user_data:
         return
     
-    # بررسی چت فعال
     if 'active_chat' not in context.user_data:
-        # فقط برای کاربران ثبت‌نام شده پیام بده
         if user and user['is_setup_complete']:
-            await update.message.reply_text(
-                "❌ شما در هیچ چتی نیستی!\nبرای شروع از گزینه جستجو یا چت‌های من استفاده کن.",
-                reply_markup=main_menu_keyboard()
-            )
+            await update.message.reply_text("❌ شما در هیچ چتی نیستی!\nبرای شروع از گزینه جستجو یا چت‌های من استفاده کن.", reply_markup=main_menu_keyboard())
         return
     
     chat_id = context.user_data['active_chat']
     sender_id = user_id
     
-    # بررسی اعتبار چت
-    chat = db.fetchone(
-        "SELECT user1, user2, is_active, blocked_by FROM chats WHERE id=?",
-        (chat_id,)
-    )
+    chat = db.fetchone("SELECT user1, user2, is_active, blocked_by FROM chats WHERE id=?", (chat_id,))
     
     if not chat or not chat['is_active']:
         await update.message.reply_text("❌ این چت فعال نیست!", reply_markup=main_menu_keyboard())
@@ -1345,77 +1073,45 @@ async def handle_chat_message(update: Update, context: ContextTypes.DEFAULT_TYPE
         return
     
     partner_id = chat['user2'] if chat['user1'] == sender_id else chat['user1']
-    
-    # بروزرسانی زمان آخرین پیام
     db.execute("UPDATE chats SET last_message_at=? WHERE id=?", (datetime.now(), chat_id))
     
     try:
-        # ارسال پیام بر اساس نوع
         if update.message.photo:
             caption = update.message.caption if update.message.caption else None
-            await context.bot.send_photo(
-                chat_id=partner_id,
-                photo=update.message.photo[-1].file_id,
-                caption=caption
-            )
+            await context.bot.send_photo(chat_id=partner_id, photo=update.message.photo[-1].file_id, caption=caption)
             await update.message.reply_text("✅")
-            
         elif update.message.text:
-            await context.bot.send_message(
-                chat_id=partner_id,
-                text=update.message.text
-            )
+            await context.bot.send_message(chat_id=partner_id, text=update.message.text)
             await update.message.reply_text("✅")
-            
         elif update.message.sticker:
             await context.bot.send_sticker(partner_id, update.message.sticker.file_id)
             await update.message.reply_text("✅")
-            
         elif update.message.animation:
             caption = update.message.caption if update.message.caption else "🎬 گیف"
-            await context.bot.send_animation(
-                partner_id, 
-                update.message.animation.file_id,
-                caption=caption
-            )
+            await context.bot.send_animation(partner_id, update.message.animation.file_id, caption=caption)
             await update.message.reply_text("✅")
-            
         elif update.message.video:
             caption = update.message.caption if update.message.caption else "🎥 ویدیو"
-            await context.bot.send_video(
-                partner_id, 
-                update.message.video.file_id,
-                caption=caption
-            )
+            await context.bot.send_video(partner_id, update.message.video.file_id, caption=caption)
             await update.message.reply_text("✅")
-            
         elif update.message.voice:
             await context.bot.send_voice(partner_id, update.message.voice.file_id)
             await update.message.reply_text("✅")
-            
         elif update.message.audio:
             await context.bot.send_audio(partner_id, update.message.audio.file_id)
             await update.message.reply_text("✅")
-            
         elif update.message.document:
             caption = update.message.caption if update.message.caption else "📄 فایل"
-            await context.bot.send_document(
-                partner_id, 
-                update.message.document.file_id,
-                caption=caption
-            )
+            await context.bot.send_document(partner_id, update.message.document.file_id, caption=caption)
             await update.message.reply_text("✅")
-            
         else:
             await update.message.reply_text("❌ این نوع پیام پشتیبانی نمی‌شه!")
-            
     except Exception as e:
         logger.error(f"Error sending message: {e}")
         await update.message.reply_text(f"❌ ارسال ناموفق!")
 
 # ============ سایر هندلرها ============
 async def request_photo(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    """درخواست عکس"""
     query = update.callback_query
     await query.answer()
     
@@ -1429,20 +1125,14 @@ async def request_photo(update: Update, context: ContextTypes.DEFAULT_TYPE):
     
     if user and user['photo_file_id']:
         try:
-            await context.bot.send_photo(
-                update.effective_user.id,
-                user['photo_file_id'],
-                caption="📸 عکس درخواستی:"
-            )
+            await context.bot.send_photo(update.effective_user.id, user['photo_file_id'], caption="📸 عکس درخواستی:")
             await query.edit_message_text("✅ عکس ارسال شد!")
-        except Exception as e:
-            logger.error(f"Error sending photo: {e}")
+        except:
             await query.edit_message_text("❌ خطا در ارسال عکس!")
     else:
         await query.edit_message_text("❌ کاربر مورد نظر عکسی ندارد!")
 
 async def block_user(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    """بلاک کاربر"""
     query = update.callback_query
     await query.answer()
     
@@ -1460,13 +1150,9 @@ async def block_user(update: Update, context: ContextTypes.DEFAULT_TYPE):
         [InlineKeyboardButton("🔙 انصراف", callback_data="close_chat")]
     ]
     
-    await query.edit_message_text(
-        "🚫 چرا می‌خوای این کاربر رو بلاک کنی؟",
-        reply_markup=InlineKeyboardMarkup(keyboard)
-    )
+    await query.edit_message_text("🚫 چرا می‌خوای این کاربر رو بلاک کنی؟", reply_markup=InlineKeyboardMarkup(keyboard))
 
 async def block_reason(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    """ثبت دلیل بلاک"""
     query = update.callback_query
     await query.answer()
     
@@ -1482,91 +1168,52 @@ async def block_reason(update: Update, context: ContextTypes.DEFAULT_TYPE):
     chat_id = context.user_data.get('active_chat')
     
     try:
-        # ثبت بلاک
-        db.execute("""
-            INSERT INTO blocks (blocker_id, blocked_id, reason, created_at)
-            VALUES (?, ?, ?, ?)
-        """, (current_user, user_id, reason, datetime.now()))
+        db.execute("INSERT INTO blocks (blocker_id, blocked_id, reason, created_at) VALUES (?, ?, ?, ?)", (current_user, user_id, reason, datetime.now()))
         
-        # غیرفعال کردن چت
         if chat_id:
-            db.execute(
-                "UPDATE chats SET is_active=0, blocked_by=? WHERE id=?",
-                (current_user, chat_id)
-            )
+            db.execute("UPDATE chats SET is_active=0, blocked_by=? WHERE id=?", (current_user, chat_id))
         
-        reason_text = {
-            "abuse": "فحاشی و بی‌ادبی",
-            "spam": "مزاحمت و اسپم",
-            "fake": "دروغ و کلاهبرداری",
-            "not_interested": "مورد پسندم نبود"
-        }.get(reason, "نامشخص")
+        reason_text = {"abuse": "فحاشی و بی‌ادبی", "spam": "مزاحمت و اسپم", "fake": "دروغ و کلاهبرداری", "not_interested": "مورد پسندم نبود"}.get(reason, "نامشخص")
         
-        # اطلاع به طرف مقابل
         try:
-            await context.bot.send_message(
-                user_id,
-                f"🚫 شما توسط یک کاربر بلاک شدید!\nدلیل: {reason_text}\n\n"
-                "لطفاً در رفتار خودت تجدید نظر کن.",
-                reply_markup=main_menu_keyboard()
-            )
+            await context.bot.send_message(user_id, f"🚫 شما توسط یک کاربر بلاک شدید!\nدلیل: {reason_text}\n\nلطفاً در رفتار خودت تجدید نظر کن.", reply_markup=main_menu_keyboard())
         except:
             pass
         
         context.user_data.pop('active_chat', None)
         context.user_data.pop('chat_partner', None)
         
-        await query.edit_message_text(
-            f"✅ کاربر با موفقیت بلاک شد!\nدلیل: {reason_text}\n\n"
-            "از اینکه به ما در حفظ امنیت کمک کردی متشکریم.",
-            reply_markup=main_menu_keyboard()
-        )
+        await query.edit_message_text(f"✅ کاربر با موفقیت بلاک شد!\nدلیل: {reason_text}\n\nاز اینکه به ما در حفظ امنیت کمک کردی متشکریم.", reply_markup=main_menu_keyboard())
         
     except Exception as e:
         logger.error(f"Error in block_reason: {e}")
-        await query.edit_message_text(
-            "❌ خطا در بلاک کردن!",
-            reply_markup=main_menu_keyboard()
-        )
+        await query.edit_message_text("❌ خطا در بلاک کردن!", reply_markup=main_menu_keyboard())
 
 async def close_chat(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    """بستن چت"""
     query = update.callback_query
     await query.answer()
     
     context.user_data.pop('active_chat', None)
     context.user_data.pop('chat_partner', None)
     
-    await query.edit_message_text(
-        "✅ چت بسته شد!",
-        reply_markup=main_menu_keyboard()
-    )
+    await query.edit_message_text("✅ چت بسته شد!", reply_markup=main_menu_keyboard())
 
 async def back_to_candidate(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    """بازگشت به کاندید"""
     query = update.callback_query
     await query.answer()
     await show_candidate(update, context)
 
 async def back_to_menu(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    """بازگشت به منو"""
     query = update.callback_query
     await query.answer()
     
     try:
-        await query.edit_message_text(
-            "🏠 منوی اصلی:",
-            reply_markup=main_menu_keyboard()
-        )
+        await query.edit_message_text("🏠 منوی اصلی:", reply_markup=main_menu_keyboard())
     except:
-        await query.message.reply_text(
-            "🏠 منوی اصلی:",
-            reply_markup=main_menu_keyboard()
-        )
+        await query.message.reply_text("🏠 منوی اصلی:", reply_markup=main_menu_keyboard())
 
 # ============ ویرایش پروفایل ============
 async def edit_profile(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    """ویرایش پروفایل"""
     query = update.callback_query
     await query.answer()
     
@@ -1589,24 +1236,17 @@ async def edit_profile(update: Update, context: ContextTypes.DEFAULT_TYPE):
     info_text += "کدوم بخش رو می‌خوای ویرایش کنی؟"
     
     keyboard = [
-        [InlineKeyboardButton("👤 جنسیت", callback_data="edit_gender"),
-         InlineKeyboardButton("📅 سن", callback_data="edit_age")],
-        [InlineKeyboardButton("🎯 هدف", callback_data="edit_purpose"),
-         InlineKeyboardButton("🏙️ شهر", callback_data="edit_city")],
-        [InlineKeyboardButton("🎨 علایق", callback_data="edit_interests"),
-         InlineKeyboardButton("💼 وضعیت شغلی", callback_data="edit_job")],
+        [InlineKeyboardButton("👤 جنسیت", callback_data="edit_gender"), InlineKeyboardButton("📅 سن", callback_data="edit_age")],
+        [InlineKeyboardButton("🎯 هدف", callback_data="edit_purpose"), InlineKeyboardButton("🏙️ شهر", callback_data="edit_city")],
+        [InlineKeyboardButton("🎨 علایق", callback_data="edit_interests"), InlineKeyboardButton("💼 وضعیت شغلی", callback_data="edit_job")],
         [InlineKeyboardButton("📝 توضیحات", callback_data="edit_description")],
         [InlineKeyboardButton("📸 عکس پروفایل", callback_data="edit_photo")],
         [InlineKeyboardButton("🔙 برگشت به منو", callback_data="back_to_menu")]
     ]
     
-    await query.edit_message_text(
-        info_text,
-        reply_markup=InlineKeyboardMarkup(keyboard)
-    )
+    await query.edit_message_text(info_text, reply_markup=InlineKeyboardMarkup(keyboard))
 
 async def edit_profile_field(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    """ویرایش یک فیلد خاص"""
     query = update.callback_query
     await query.answer()
     
@@ -1623,16 +1263,9 @@ async def edit_profile_field(update: Update, context: ContextTypes.DEFAULT_TYPE)
                 [InlineKeyboardButton("🔙 برگشت", callback_data="edit_profile")]
             ])
         )
-    
     elif field == "age":
-        await query.edit_message_text(
-            f"سن فعلی: {user['age']}\n\nسن جدید رو وارد کن (فقط عدد):",
-            reply_markup=InlineKeyboardMarkup([
-                [InlineKeyboardButton("🔙 برگشت", callback_data="edit_profile")]
-            ])
-        )
+        await query.edit_message_text(f"سن فعلی: {user['age']}\n\nسن جدید رو وارد کن (فقط عدد):", reply_markup=InlineKeyboardMarkup([[InlineKeyboardButton("🔙 برگشت", callback_data="edit_profile")]]))
         context.user_data['editing_field'] = 'age'
-    
     elif field == "purpose":
         await query.edit_message_text(
             f"هدف فعلی: {user['purpose']}\n\nهدف جدید رو انتخاب کن:",
@@ -1644,26 +1277,13 @@ async def edit_profile_field(update: Update, context: ContextTypes.DEFAULT_TYPE)
                 [InlineKeyboardButton("🔙 برگشت", callback_data="edit_profile")]
             ])
         )
-    
     elif field == "city":
-        await query.edit_message_text(
-            f"شهر فعلی: {user['city']}\n\nشهر جدید رو وارد کن:",
-            reply_markup=InlineKeyboardMarkup([
-                [InlineKeyboardButton("🔙 برگشت", callback_data="edit_profile")]
-            ])
-        )
+        await query.edit_message_text(f"شهر فعلی: {user['city']}\n\nشهر جدید رو وارد کن:", reply_markup=InlineKeyboardMarkup([[InlineKeyboardButton("🔙 برگشت", callback_data="edit_profile")]]))
         context.user_data['editing_field'] = 'city'
-    
     elif field == "interests":
-        await query.edit_message_text(
-            "🎨 علایق جدید رو انتخاب کن (حداکثر ۵ تا):",
-            reply_markup=get_interests_keyboard(
-                json.loads(user['interests']) if user['interests'] else []
-            )
-        )
+        await query.edit_message_text("🎨 علایق جدید رو انتخاب کن (حداکثر ۵ تا):", reply_markup=get_interests_keyboard(json.loads(user['interests']) if user['interests'] else []))
         context.user_data['editing_interests'] = json.loads(user['interests']) if user['interests'] else []
         context.user_data['editing_field'] = 'interests'
-    
     elif field == "job":
         await query.edit_message_text(
             f"وضعیت فعلی: {user['job_status']}\n\nوضعیت جدید رو انتخاب کن:",
@@ -1675,29 +1295,14 @@ async def edit_profile_field(update: Update, context: ContextTypes.DEFAULT_TYPE)
                 [InlineKeyboardButton("🔙 برگشت", callback_data="edit_profile")]
             ])
         )
-    
     elif field == "description":
-        await query.edit_message_text(
-            f"توضیحات فعلی: {user['description'] if user['description'] else '❌ ندارد'}\n\n"
-            "توضیحات جدید رو وارد کن (حداکثر ۲۰۰ کاراکتر):",
-            reply_markup=InlineKeyboardMarkup([
-                [InlineKeyboardButton("🔙 برگشت", callback_data="edit_profile")]
-            ])
-        )
+        await query.edit_message_text(f"توضیحات فعلی: {user['description'] if user['description'] else '❌ ندارد'}\n\nتوضیحات جدید رو وارد کن (حداکثر ۲۰۰ کاراکتر):", reply_markup=InlineKeyboardMarkup([[InlineKeyboardButton("🔙 برگشت", callback_data="edit_profile")]]))
         context.user_data['editing_field'] = 'description'
-    
     elif field == "photo":
-        await query.edit_message_text(
-            "📸 عکس جدید رو بفرست.\n\n"
-            "این عکس وقتی کسی درخواست عکس بده، براش ارسال میشه.",
-            reply_markup=InlineKeyboardMarkup([
-                [InlineKeyboardButton("🔙 برگشت", callback_data="edit_profile")]
-            ])
-        )
+        await query.edit_message_text("📸 عکس جدید رو بفرست.\n\nاین عکس وقتی کسی درخواست عکس بده، براش ارسال میشه.", reply_markup=InlineKeyboardMarkup([[InlineKeyboardButton("🔙 برگشت", callback_data="edit_profile")]]))
         context.user_data['editing_field'] = 'photo'
 
 async def update_profile_field(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    """بروزرسانی فیلد ویرایش شده"""
     query = update.callback_query
     await query.answer()
     
@@ -1709,19 +1314,16 @@ async def update_profile_field(update: Update, context: ContextTypes.DEFAULT_TYP
         gender_map = {"male": "مرد", "female": "زن", "other": "سایر"}
         save_user(user_id, {'gender': gender_map[gender]})
         await query.edit_message_text("✅ جنسیت به‌روز شد!", reply_markup=main_menu_keyboard())
-    
     elif data.startswith("purpose_"):
         purpose = data.replace("purpose_", "")
         purpose_map = {"marriage": "ازدواج", "relationship": "دوستی", "friendship": "رفاقت", "unknown": "نمیدونم"}
         save_user(user_id, {'purpose': purpose_map[purpose]})
         await query.edit_message_text("✅ هدف به‌روز شد!", reply_markup=main_menu_keyboard())
-    
     elif data.startswith("job_"):
         job = data.replace("job_", "")
         job_map = {"student": "دانشجو", "employed": "شاغل", "seeking": "جویای کار", "home": "خانه‌دار"}
         save_user(user_id, {'job_status': job_map[job]})
         await query.edit_message_text("✅ وضعیت شغلی به‌روز شد!", reply_markup=main_menu_keyboard())
-    
     elif data.startswith("interest_"):
         interest = data.replace("interest_", "")
         if 'editing_interests' not in context.user_data:
@@ -1736,7 +1338,6 @@ async def update_profile_field(update: Update, context: ContextTypes.DEFAULT_TYP
             context.user_data['editing_interests'].append(interest)
         
         await edit_profile_field(update, context)
-    
     elif data == "interests_done":
         if not context.user_data.get('editing_interests', []):
             await query.edit_message_text("❌ حداقل یک علاقه انتخاب کن!", reply_markup=None)
@@ -1749,7 +1350,6 @@ async def update_profile_field(update: Update, context: ContextTypes.DEFAULT_TYP
         await query.edit_message_text("✅ علایق به‌روز شد!", reply_markup=main_menu_keyboard())
 
 async def handle_profile_text_input(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    """ورودی‌های متنی در ویرایش پروفایل"""
     user_id = update.effective_user.id
     field = context.user_data.get('editing_field')
     
@@ -1763,11 +1363,9 @@ async def handle_profile_text_input(update: Update, context: ContextTypes.DEFAUL
                 await update.message.reply_text("❌ سن باید بین ۱۰ تا ۱۰۰ باشه!")
         except ValueError:
             await update.message.reply_text("❌ لطفاً عدد وارد کن!")
-    
     elif field == 'city':
         save_user(user_id, {'city': update.message.text})
         await update.message.reply_text("✅ شهر به‌روز شد!", reply_markup=main_menu_keyboard())
-    
     elif field == 'description':
         text = update.message.text
         if len(text) > 200:
@@ -1775,7 +1373,6 @@ async def handle_profile_text_input(update: Update, context: ContextTypes.DEFAUL
             return
         save_user(user_id, {'description': text})
         await update.message.reply_text("✅ توضیحات به‌روز شد!", reply_markup=main_menu_keyboard())
-    
     elif field == 'photo':
         if update.message.photo:
             photo_file = update.message.photo[-1]
@@ -1789,7 +1386,6 @@ async def handle_profile_text_input(update: Update, context: ContextTypes.DEFAUL
 
 # ============ حریم خصوصی ============
 async def privacy_settings(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    """تنظیمات حریم خصوصی"""
     query = update.callback_query
     await query.answer()
     
@@ -1801,11 +1397,7 @@ async def privacy_settings(update: Update, context: ContextTypes.DEFAULT_TYPE):
     age_status = "✅" if user['privacy_age'] else "❌"
     city_status = "✅" if user['privacy_city'] else "❌"
     
-    visibility_text = {
-        'all': '🌍 همه',
-        'same_city': '🏙️ همشهری‌ها',
-        'none': '❌ هیچکس'
-    }.get(user['privacy_visibility'], '🌍 همه')
+    visibility_text = {'all': '🌍 همه', 'same_city': '🏙️ همشهری‌ها', 'none': '❌ هیچکس'}.get(user['privacy_visibility'], '🌍 همه')
     
     keyboard = [
         [InlineKeyboardButton(f"{age_status} نمایش سن", callback_data="privacy_toggle_age")],
@@ -1815,19 +1407,11 @@ async def privacy_settings(update: Update, context: ContextTypes.DEFAULT_TYPE):
     ]
     
     await query.edit_message_text(
-        "🔒 تنظیمات حریم خصوصی:\n\n"
-        f"وضعیت فعلی:\n"
-        f"سن: {'نمایش داده میشه' if user['privacy_age'] else 'مخفی'}\n"
-        f"شهر: {'نمایش داده میشه' if user['privacy_city'] else 'مخفی'}\n"
-        f"نمایش به: {visibility_text}\n\n"
-        "✅ = نمایش داده میشه\n"
-        "❌ = نمایش داده نمیشه\n\n"
-        "روی هر گزینه بزن تا تغییر کنه:",
+        f"🔒 تنظیمات حریم خصوصی:\n\nوضعیت فعلی:\nسن: {'نمایش داده میشه' if user['privacy_age'] else 'مخفی'}\nشهر: {'نمایش داده میشه' if user['privacy_city'] else 'مخفی'}\nنمایش به: {visibility_text}\n\n✅ = نمایش داده میشه\n❌ = نمایش داده نمیشه\n\nروی هر گزینه بزن تا تغییر کنه:",
         reply_markup=InlineKeyboardMarkup(keyboard)
     )
 
 async def privacy_toggle(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    """تغییر تنظیمات حریم خصوصی"""
     query = update.callback_query
     await query.answer()
     
@@ -1848,23 +1432,15 @@ async def privacy_toggle(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
 # ============ سایر منوها ============
 async def my_requests(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    """درخواست‌های من"""
     query = update.callback_query
     await query.answer()
     
     user_id = update.effective_user.id
     
-    received = db.fetchall("""
-        SELECT from_user, created_at FROM requests 
-        WHERE to_user=? AND status='pending'
-        ORDER BY created_at DESC
-    """, (user_id,))
+    received = db.fetchall("SELECT from_user, created_at FROM requests WHERE to_user=? AND status='pending' ORDER BY created_at DESC", (user_id,))
     
     if not received:
-        await query.edit_message_text(
-            "📋 هیچ درخواست جدیدی ندارید!",
-            reply_markup=main_menu_keyboard()
-        )
+        await query.edit_message_text("📋 هیچ درخواست جدیدی ندارید!", reply_markup=main_menu_keyboard())
         return
     
     message = "📋 درخواست‌های دریافتی:\n\n"
@@ -1873,53 +1449,29 @@ async def my_requests(update: Update, context: ContextTypes.DEFAULT_TYPE):
     for req in received[:5]:
         from_user = get_user_dict(req['from_user'])
         if from_user:
-            message += f"👤 سن: {from_user['age'] if from_user['privacy_age'] else '❌'}\n"
-            message += f"📍 شهر: {from_user['city'] if from_user['privacy_city'] else '❌'}\n"
-            message += f"🎯 هدف: {from_user['purpose']}\n\n"
-            keyboard.append([InlineKeyboardButton(
-                f"👀 مشاهده و پاسخ",
-                callback_data=f"view_{from_user['user_id']}"
-            )])
+            message += f"👤 سن: {from_user['age'] if from_user['privacy_age'] else '❌'}\n📍 شهر: {from_user['city'] if from_user['privacy_city'] else '❌'}\n🎯 هدف: {from_user['purpose']}\n\n"
+            keyboard.append([InlineKeyboardButton("👀 مشاهده و پاسخ", callback_data=f"view_{from_user['user_id']}")])
     
     keyboard.append([InlineKeyboardButton("🔙 برگشت به منو", callback_data="back_to_menu")])
     
-    await query.edit_message_text(
-        message,
-        reply_markup=InlineKeyboardMarkup(keyboard)
-    )
+    await query.edit_message_text(message, reply_markup=InlineKeyboardMarkup(keyboard))
 
 async def stats(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    """آمار کاربر"""
     query = update.callback_query
     await query.answer()
     
     user_id = update.effective_user.id
     
-    sent_requests = db.fetchone(
-        "SELECT COUNT(*) FROM requests WHERE from_user=? AND status='pending'",
-        (user_id,)
-    )[0]
-    
-    received_requests = db.fetchone(
-        "SELECT COUNT(*) FROM requests WHERE to_user=? AND status='pending'",
-        (user_id,)
-    )[0]
-    
-    active_chats = db.fetchone(
-        "SELECT COUNT(*) FROM chats WHERE (user1=? OR user2=?) AND is_active=1",
-        (user_id, user_id)
-    )[0]
+    sent_requests = db.fetchone("SELECT COUNT(*) FROM requests WHERE from_user=? AND status='pending'", (user_id,))[0]
+    received_requests = db.fetchone("SELECT COUNT(*) FROM requests WHERE to_user=? AND status='pending'", (user_id,))[0]
+    active_chats = db.fetchone("SELECT COUNT(*) FROM chats WHERE (user1=? OR user2=?) AND is_active=1", (user_id, user_id))[0]
     
     await query.edit_message_text(
-        f"📊 آمار شما:\n\n"
-        f"📤 درخواست‌های ارسالی: {sent_requests}\n"
-        f"📥 درخواست‌های دریافتی: {received_requests}\n"
-        f"💬 چت‌های فعال: {active_chats}",
+        f"📊 آمار شما:\n\n📤 درخواست‌های ارسالی: {sent_requests}\n📥 درخواست‌های دریافتی: {received_requests}\n💬 چت‌های فعال: {active_chats}",
         reply_markup=main_menu_keyboard()
     )
 
 async def reset_bot(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    """ریست ربات"""
     query = update.callback_query
     await query.answer()
     
@@ -1928,21 +1480,12 @@ async def reset_bot(update: Update, context: ContextTypes.DEFAULT_TYPE):
     try:
         save_user(user_id, {'is_setup_complete': 0})
         context.user_data.clear()
-        
-        await query.edit_message_text(
-            "🔄 ربات ریست شد!\n"
-            "لطفاً دوباره /start رو بزن تا ثبت‌نام مجدد انجام بشه.",
-            reply_markup=None
-        )
+        await query.edit_message_text("🔄 ربات ریست شد!\nلطفاً دوباره /start رو بزن تا ثبت‌نام مجدد انجام بشه.", reply_markup=None)
     except Exception as e:
         logger.error(f"Error in reset_bot: {e}")
-        await query.edit_message_text(
-            "❌ خطا در ریست کردن!",
-            reply_markup=main_menu_keyboard()
-        )
+        await query.edit_message_text("❌ خطا در ریست کردن!", reply_markup=main_menu_keyboard())
 
 async def help_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    """راهنما"""
     query = update.callback_query
     await query.answer()
     
@@ -1966,26 +1509,23 @@ async def help_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
 # ============ تابع پاکسازی خودکار ============
 async def scheduled_cleanup():
-    """اجرای منظم پاکسازی"""
     while True:
         try:
-            await asyncio.sleep(3600)  # هر ۱ ساعت
+            await asyncio.sleep(3600)
             cleanup_expired_chats()
             logger.info("🔄 Scheduled cleanup completed")
         except Exception as e:
             logger.error(f"Error in scheduled cleanup: {e}")
 
-# ============ تابع اصلی ============
-def main():
-    """تابع اصلی برنامه"""
+# ============ تابع اصلی ربات ============
+async def run_bot():
+    """اجرای ربات تلگرام"""
     try:
-        # راه‌اندازی دیتابیس
-        logger.info("🚀 Starting bot...")
+        logger.info("🤖 Starting Telegram bot...")
         
-        # ساخت اپلیکیشن
         application = Application.builder().token(TOKEN).build()
         
-        # ============ هندلر ثبت‌نام ============
+        # هندلر ثبت‌نام
         conv_handler = ConversationHandler(
             entry_points=[CommandHandler('start', start)],
             states={
@@ -2012,7 +1552,7 @@ def main():
         )
         application.add_handler(conv_handler)
         
-        # ============ منوهای اصلی ============
+        # منوهای اصلی
         application.add_handler(CallbackQueryHandler(search, pattern='^search$'))
         application.add_handler(CallbackQueryHandler(edit_profile, pattern='^edit_profile$'))
         application.add_handler(CallbackQueryHandler(my_requests, pattern='^my_requests$'))
@@ -2022,64 +1562,63 @@ def main():
         application.add_handler(CallbackQueryHandler(help_command, pattern='^help$'))
         application.add_handler(CallbackQueryHandler(back_to_menu, pattern='^back_to_menu$'))
         
-        # ============ چت‌ها ============
+        # چت‌ها
         application.add_handler(CallbackQueryHandler(show_chats, pattern='^show_chats$'))
         application.add_handler(CallbackQueryHandler(switch_chat, pattern='^switch_chat_'))
         
-        # ============ ویرایش پروفایل ============
+        # ویرایش پروفایل
         application.add_handler(CallbackQueryHandler(edit_profile_field, pattern='^edit_(gender|age|purpose|city|interests|job|description|photo)$'))
         application.add_handler(CallbackQueryHandler(update_profile_field, pattern='^update_(gender_|purpose_|job_|interest_|interests_done)'))
         application.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, handle_profile_text_input))
         application.add_handler(MessageHandler(filters.PHOTO, handle_profile_text_input))
         
-        # ============ جستجو و درخواست‌ها ============
+        # جستجو و درخواست‌ها
         application.add_handler(CallbackQueryHandler(candidate_action, pattern='^(like|dislike|more)_'))
         application.add_handler(CallbackQueryHandler(show_candidate, pattern='^next_candidate$'))
         application.add_handler(CallbackQueryHandler(back_to_candidate, pattern='^back_'))
         application.add_handler(CallbackQueryHandler(view_requester, pattern='^view_'))
         application.add_handler(CallbackQueryHandler(handle_request, pattern='^(accept|reject)_'))
         
-        # ============ چت ============
+        # چت
         application.add_handler(CallbackQueryHandler(start_chat, pattern='^chat_'))
         application.add_handler(CallbackQueryHandler(request_photo, pattern='^photo_'))
         application.add_handler(CallbackQueryHandler(block_user, pattern='^block_'))
         application.add_handler(CallbackQueryHandler(block_reason, pattern='^block_reason_'))
         application.add_handler(CallbackQueryHandler(close_chat, pattern='^close_chat$'))
         
-        # ============ حریم خصوصی ============
+        # حریم خصوصی
         application.add_handler(CallbackQueryHandler(privacy_toggle, pattern='^privacy_toggle_(age|city|change_visibility)$'))
         
-        # ============ هندلر اصلی پیام‌ها ============
-        application.add_handler(
-            MessageHandler(filters.ALL & ~filters.COMMAND, handle_chat_message),
-            group=1
-        )
+        # هندلر اصلی پیام‌ها
+        application.add_handler(MessageHandler(filters.ALL & ~filters.COMMAND, handle_chat_message), group=1)
         
-        # ============ شروع پاکسازی خودکار ============
-        loop = asyncio.get_event_loop()
-        loop.create_task(scheduled_cleanup())
+        # پاکسازی خودکار
+        asyncio.create_task(scheduled_cleanup())
         
         logger.info("✅ Bot started successfully!")
         
-        # ============ اجرا ============
-        application.run_polling(
-            allowed_updates=[
-                'message', 
-                'callback_query', 
-                'edited_message',
-                'channel_post',
-                'edited_channel_post',
-                'inline_query',
-                'chosen_inline_result',
-                'shipping_query',
-                'pre_checkout_query'
-            ],
+        # اجرای ربات با polling
+        await application.run_polling(
+            allowed_updates=['message', 'callback_query', 'edited_message', 'channel_post', 'edited_channel_post', 'inline_query', 'chosen_inline_result', 'shipping_query', 'pre_checkout_query'],
             drop_pending_updates=True
         )
         
     except Exception as e:
-        logger.error(f"❌ Fatal error: {e}")
+        logger.error(f"❌ Bot error: {e}")
         logger.error(traceback.format_exc())
 
+# ============ نقطه ورود اصلی ============
 if __name__ == '__main__':
-    main()
+    # اجرای Flask در ترد جداگانه
+    flask_thread = threading.Thread(target=run_flask, daemon=True)
+    flask_thread.start()
+    logger.info("🌐 Flask thread started")
+    
+    # اجرای ربات در event loop اصلی
+    try:
+        asyncio.run(run_bot())
+    except KeyboardInterrupt:
+        logger.info("🛑 Bot stopped by user")
+    except Exception as e:
+        logger.error(f"❌ Fatal error: {e}")
+        logger.error(traceback.format_exc())
