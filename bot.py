@@ -3,7 +3,6 @@ import logging
 import sqlite3
 import json
 import traceback
-import asyncio
 import threading
 from datetime import datetime, timedelta
 from typing import Optional, List, Dict, Any
@@ -21,7 +20,7 @@ logging.basicConfig(
 )
 logger = logging.getLogger(__name__)
 
-# ============ وب‌سرویس Flask برای کرون‌جاب ============
+# ============ وب‌سرویس Flask ============
 web_app = Flask(__name__)
 
 @web_app.route('/')
@@ -32,199 +31,161 @@ def home():
 def ping():
     return "pong"
 
-@web_app.route('/health')
-def health():
-    return jsonify({"status": "healthy"})
+# ============ دیتابیس ============
+def init_db():
+    conn = sqlite3.connect('matchbot.db')
+    c = conn.cursor()
+    
+    c.execute('''CREATE TABLE IF NOT EXISTS users (
+        user_id INTEGER PRIMARY KEY,
+        gender TEXT,
+        age INTEGER,
+        purpose TEXT,
+        city TEXT,
+        age_min INTEGER,
+        age_max INTEGER,
+        interests TEXT,
+        job_status TEXT,
+        description TEXT,
+        privacy_age BOOLEAN DEFAULT 1,
+        privacy_city BOOLEAN DEFAULT 1,
+        privacy_visibility TEXT DEFAULT 'all',
+        photo_file_id TEXT,
+        is_active BOOLEAN DEFAULT 1,
+        created_at TIMESTAMP,
+        last_active TIMESTAMP,
+        is_setup_complete BOOLEAN DEFAULT 0
+    )''')
+    
+    c.execute('''CREATE TABLE IF NOT EXISTS requests (
+        id INTEGER PRIMARY KEY AUTOINCREMENT,
+        from_user INTEGER,
+        to_user INTEGER,
+        status TEXT DEFAULT 'pending',
+        created_at TIMESTAMP,
+        expires_at TIMESTAMP
+    )''')
+    
+    c.execute('''CREATE TABLE IF NOT EXISTS chats (
+        id INTEGER PRIMARY KEY AUTOINCREMENT,
+        user1 INTEGER,
+        user2 INTEGER,
+        match_date TIMESTAMP,
+        expiry_date TIMESTAMP,
+        is_active BOOLEAN DEFAULT 1,
+        blocked_by INTEGER DEFAULT NULL
+    )''')
+    
+    c.execute('''CREATE TABLE IF NOT EXISTS messages (
+        id INTEGER PRIMARY KEY AUTOINCREMENT,
+        chat_id INTEGER,
+        sender_id INTEGER,
+        message_text TEXT,
+        message_type TEXT DEFAULT 'text',
+        file_id TEXT,
+        timestamp TIMESTAMP,
+        is_read BOOLEAN DEFAULT 0
+    )''')
+    
+    c.execute('''CREATE TABLE IF NOT EXISTS rejected (
+        user_id INTEGER,
+        rejected_user_id INTEGER,
+        rejected_at TIMESTAMP,
+        PRIMARY KEY (user_id, rejected_user_id)
+    )''')
+    
+    c.execute('''CREATE TABLE IF NOT EXISTS blocks (
+        id INTEGER PRIMARY KEY AUTOINCREMENT,
+        blocker_id INTEGER,
+        blocked_id INTEGER,
+        reason TEXT,
+        created_at TIMESTAMP
+    )''')
+    
+    c.execute("CREATE INDEX IF NOT EXISTS idx_users_age ON users(age)")
+    c.execute("CREATE INDEX IF NOT EXISTS idx_users_purpose ON users(purpose)")
+    c.execute("CREATE INDEX IF NOT EXISTS idx_users_city ON users(city)")
+    c.execute("CREATE INDEX IF NOT EXISTS idx_users_active ON users(is_active)")
+    c.execute("CREATE INDEX IF NOT EXISTS idx_users_complete ON users(is_setup_complete)")
+    c.execute("CREATE INDEX IF NOT EXISTS idx_requests_status ON requests(status)")
+    c.execute("CREATE INDEX IF NOT EXISTS idx_requests_from ON requests(from_user)")
+    c.execute("CREATE INDEX IF NOT EXISTS idx_requests_to ON requests(to_user)")
+    c.execute("CREATE INDEX IF NOT EXISTS idx_chats_active ON chats(is_active)")
+    c.execute("CREATE INDEX IF NOT EXISTS idx_chats_users ON chats(user1, user2)")
+    c.execute("CREATE INDEX IF NOT EXISTS idx_rejected_user ON rejected(user_id)")
+    c.execute("CREATE INDEX IF NOT EXISTS idx_rejected_time ON rejected(rejected_at)")
+    c.execute("CREATE INDEX IF NOT EXISTS idx_messages_chat ON messages(chat_id)")
+    c.execute("CREATE INDEX IF NOT EXISTS idx_messages_time ON messages(timestamp)")
+    c.execute("CREATE INDEX IF NOT EXISTS idx_blocks_blocker ON blocks(blocker_id)")
+    c.execute("CREATE INDEX IF NOT EXISTS idx_blocks_blocked ON blocks(blocked_id)")
+    
+    conn.commit()
+    conn.close()
+    logger.info("✅ Database initialized!")
 
-# ============ کلاس مدیریت دیتابیس ============
-class Database:
-    _instance = None
-    
-    def __new__(cls):
-        if cls._instance is None:
-            cls._instance = super().__new__(cls)
-            cls._instance.conn = sqlite3.connect('matchbot.db', check_same_thread=False)
-            cls._instance.conn.row_factory = sqlite3.Row
-            cls._instance._init_tables()
-        return cls._instance
-    
-    def _init_tables(self):
-        cursor = self.conn.cursor()
-        
-        cursor.execute('''CREATE TABLE IF NOT EXISTS users (
-            user_id INTEGER PRIMARY KEY,
-            gender TEXT,
-            age INTEGER,
-            purpose TEXT,
-            city TEXT,
-            age_min INTEGER,
-            age_max INTEGER,
-            interests TEXT,
-            job_status TEXT,
-            description TEXT,
-            privacy_age BOOLEAN DEFAULT 1,
-            privacy_city BOOLEAN DEFAULT 1,
-            privacy_visibility TEXT DEFAULT 'all',
-            photo_file_id TEXT,
-            is_active BOOLEAN DEFAULT 1,
-            created_at TIMESTAMP,
-            last_active TIMESTAMP,
-            is_setup_complete BOOLEAN DEFAULT 0,
-            report_count INTEGER DEFAULT 0,
-            is_banned BOOLEAN DEFAULT 0
-        )''')
-        
-        cursor.execute('''CREATE TABLE IF NOT EXISTS requests (
-            id INTEGER PRIMARY KEY AUTOINCREMENT,
-            from_user INTEGER,
-            to_user INTEGER,
-            status TEXT DEFAULT 'pending',
-            created_at TIMESTAMP,
-            expires_at TIMESTAMP
-        )''')
-        
-        cursor.execute('''CREATE TABLE IF NOT EXISTS chats (
-            id INTEGER PRIMARY KEY AUTOINCREMENT,
-            user1 INTEGER,
-            user2 INTEGER,
-            match_date TIMESTAMP,
-            expiry_date TIMESTAMP,
-            is_active BOOLEAN DEFAULT 1,
-            blocked_by INTEGER DEFAULT NULL,
-            last_message_at TIMESTAMP
-        )''')
-        
-        cursor.execute('''CREATE TABLE IF NOT EXISTS messages (
-            id INTEGER PRIMARY KEY AUTOINCREMENT,
-            chat_id INTEGER,
-            sender_id INTEGER,
-            message_text TEXT,
-            message_type TEXT DEFAULT 'text',
-            file_id TEXT,
-            timestamp TIMESTAMP,
-            is_read BOOLEAN DEFAULT 0
-        )''')
-        
-        cursor.execute('''CREATE TABLE IF NOT EXISTS rejected (
-            user_id INTEGER,
-            rejected_user_id INTEGER,
-            rejected_at TIMESTAMP,
-            PRIMARY KEY (user_id, rejected_user_id)
-        )''')
-        
-        cursor.execute('''CREATE TABLE IF NOT EXISTS blocks (
-            id INTEGER PRIMARY KEY AUTOINCREMENT,
-            blocker_id INTEGER,
-            blocked_id INTEGER,
-            reason TEXT,
-            created_at TIMESTAMP
-        )''')
-        
-        cursor.execute('''CREATE TABLE IF NOT EXISTS reports (
-            id INTEGER PRIMARY KEY AUTOINCREMENT,
-            reporter_id INTEGER,
-            reported_id INTEGER,
-            reason TEXT,
-            created_at TIMESTAMP,
-            status TEXT DEFAULT 'pending'
-        )''')
-        
-        # ایندکس‌ها
-        cursor.execute("CREATE INDEX IF NOT EXISTS idx_users_age ON users(age)")
-        cursor.execute("CREATE INDEX IF NOT EXISTS idx_users_purpose ON users(purpose)")
-        cursor.execute("CREATE INDEX IF NOT EXISTS idx_users_city ON users(city)")
-        cursor.execute("CREATE INDEX IF NOT EXISTS idx_users_active ON users(is_active)")
-        cursor.execute("CREATE INDEX IF NOT EXISTS idx_users_complete ON users(is_setup_complete)")
-        cursor.execute("CREATE INDEX IF NOT EXISTS idx_users_banned ON users(is_banned)")
-        cursor.execute("CREATE INDEX IF NOT EXISTS idx_requests_status ON requests(status)")
-        cursor.execute("CREATE INDEX IF NOT EXISTS idx_requests_from ON requests(from_user)")
-        cursor.execute("CREATE INDEX IF NOT EXISTS idx_requests_to ON requests(to_user)")
-        cursor.execute("CREATE INDEX IF NOT EXISTS idx_chats_active ON chats(is_active)")
-        cursor.execute("CREATE INDEX IF NOT EXISTS idx_chats_users ON chats(user1, user2)")
-        cursor.execute("CREATE INDEX IF NOT EXISTS idx_chats_expiry ON chats(expiry_date)")
-        cursor.execute("CREATE INDEX IF NOT EXISTS idx_rejected_user ON rejected(user_id)")
-        cursor.execute("CREATE INDEX IF NOT EXISTS idx_rejected_time ON rejected(rejected_at)")
-        cursor.execute("CREATE INDEX IF NOT EXISTS idx_messages_chat ON messages(chat_id)")
-        cursor.execute("CREATE INDEX IF NOT EXISTS idx_messages_time ON messages(timestamp)")
-        cursor.execute("CREATE INDEX IF NOT EXISTS idx_blocks_blocker ON blocks(blocker_id)")
-        cursor.execute("CREATE INDEX IF NOT EXISTS idx_blocks_blocked ON blocks(blocked_id)")
-        cursor.execute("CREATE INDEX IF NOT EXISTS idx_reports_reported ON reports(reported_id)")
-        cursor.execute("CREATE INDEX IF NOT EXISTS idx_reports_status ON reports(status)")
-        
-        self.conn.commit()
-        logger.info("✅ Database initialized!")
-    
-    def execute(self, query: str, params: tuple = None):
-        try:
-            cursor = self.conn.cursor()
-            if params:
-                cursor.execute(query, params)
-            else:
-                cursor.execute(query)
-            self.conn.commit()
-            return cursor
-        except sqlite3.Error as e:
-            logger.error(f"Database error: {e}")
-            raise
-    
-    def fetchone(self, query: str, params: tuple = None):
-        cursor = self.execute(query, params)
-        return cursor.fetchone()
-    
-    def fetchall(self, query: str, params: tuple = None):
-        cursor = self.execute(query, params)
-        return cursor.fetchall()
+def get_user(user_id):
+    conn = sqlite3.connect('matchbot.db')
+    c = conn.cursor()
+    c.execute("SELECT * FROM users WHERE user_id=?", (user_id,))
+    user = c.fetchone()
+    conn.close()
+    return user
 
-db = Database()
-
-# ============ توابع کمکی ============
-def get_user(user_id: int):
-    return db.fetchone("SELECT * FROM users WHERE user_id=?", (user_id,))
-
-def get_user_dict(user_id: int):
+def get_user_dict(user_id):
     user = get_user(user_id)
     if not user:
         return None
-    return dict(user)
+    columns = ['user_id', 'gender', 'age', 'purpose', 'city', 'age_min', 'age_max', 
+               'interests', 'job_status', 'description', 'privacy_age', 'privacy_city', 
+               'privacy_visibility', 'photo_file_id', 'is_active', 'created_at', 'last_active', 'is_setup_complete']
+    return dict(zip(columns, user))
 
-def save_user(user_id: int, data: Dict[str, Any]):
-    try:
-        existing = get_user(user_id)
-        if existing:
-            set_clause = ", ".join([f"{k}=?" for k in data.keys()])
-            values = list(data.values()) + [user_id]
-            db.execute(f"UPDATE users SET {set_clause} WHERE user_id=?", tuple(values))
-        else:
-            columns = ", ".join(data.keys())
-            placeholders = ", ".join(["?"] * len(data))
-            values = list(data.values())
-            db.execute(f"INSERT INTO users ({columns}) VALUES ({placeholders})", tuple(values))
-        return True
-    except Exception as e:
-        logger.error(f"Error saving user: {e}")
-        return False
+def save_user(user_id, data):
+    conn = sqlite3.connect('matchbot.db')
+    c = conn.cursor()
+    
+    c.execute("SELECT * FROM users WHERE user_id=?", (user_id,))
+    exists = c.fetchone()
+    
+    if exists:
+        set_clause = ", ".join([f"{k}=?" for k in data.keys()])
+        values = list(data.values()) + [user_id]
+        c.execute(f"UPDATE users SET {set_clause} WHERE user_id=?", values)
+    else:
+        columns = ", ".join(data.keys())
+        placeholders = ", ".join(["?"] * len(data))
+        values = list(data.values())
+        c.execute(f"INSERT INTO users ({columns}) VALUES ({placeholders})", values)
+    
+    conn.commit()
+    conn.close()
 
-def is_blocked(user_id: int, target_id: int) -> bool:
-    result = db.fetchone("""
+def is_blocked(user_id, target_id):
+    conn = sqlite3.connect('matchbot.db')
+    c = conn.cursor()
+    c.execute("""
         SELECT * FROM blocks 
         WHERE (blocker_id=? AND blocked_id=?) OR (blocker_id=? AND blocked_id=?)
     """, (user_id, target_id, target_id, user_id))
+    result = c.fetchone()
+    conn.close()
     return result is not None
 
-def cleanup_expired_chats() -> int:
-    try:
-        cursor = db.execute("""
-            UPDATE chats 
-            SET is_active = 0 
-            WHERE expiry_date < datetime('now') 
-            AND is_active = 1
-        """)
-        return cursor.rowcount
-    except Exception as e:
-        logger.error(f"Error cleaning chats: {e}")
-        return 0
+def cleanup_expired_chats():
+    conn = sqlite3.connect('matchbot.db')
+    c = conn.cursor()
+    c.execute("""
+        UPDATE chats 
+        SET is_active = 0 
+        WHERE expiry_date < datetime('now') 
+        AND is_active = 1
+    """)
+    conn.commit()
+    conn.close()
 
-# ============ کیبوردها ============
+# ============ مراحل ثبت‌نام ============
+GENDER, AGE, PURPOSE, CITY, AGE_MIN, AGE_MAX, INTERESTS, JOB_STATUS, DESCRIPTION, PHOTO, PRIVACY = range(11)
+
 def main_menu_keyboard():
     keyboard = [
         [InlineKeyboardButton("🔍 جستجو", callback_data="search")],
@@ -238,7 +199,7 @@ def main_menu_keyboard():
     ]
     return InlineKeyboardMarkup(keyboard)
 
-def chat_keyboard(other_user: int):
+def chat_keyboard(other_user):
     return InlineKeyboardMarkup([
         [InlineKeyboardButton("📸 درخواست عکس", callback_data=f"photo_{other_user}")],
         [InlineKeyboardButton("🚫 بلاک کردن", callback_data=f"block_{other_user}")],
@@ -246,19 +207,36 @@ def chat_keyboard(other_user: int):
         [InlineKeyboardButton("❌ بستن چت", callback_data="close_chat")]
     ])
 
-# ============ مراحل ثبت‌نام ============
-GENDER, AGE, PURPOSE, CITY, AGE_MIN, AGE_MAX, INTERESTS, JOB_STATUS, DESCRIPTION, PHOTO, PRIVACY = range(11)
+def get_interests_keyboard(selected=None):
+    if selected is None:
+        selected = []
+    
+    interests_list = [
+        "🎬 فیلم", "📚 کتاب", "🎵 موسیقی",
+        "🏋️ ورزش", "🍳 آشپزی", "🎮 بازی",
+        "🧳 سفر", "🌿 طبیعت", "✏️ نقاشی",
+        "💻 تکنولوژی", "🧘 مدیتیشن", "🐱 حیوانات"
+    ]
+    
+    keyboard = []
+    for i in range(0, len(interests_list), 3):
+        row = []
+        for item in interests_list[i:i+3]:
+            if item in selected:
+                row.append(InlineKeyboardButton(f"✅ {item}", callback_data=f"interest_{item}"))
+            else:
+                row.append(InlineKeyboardButton(f"⬜ {item}", callback_data=f"interest_{item}"))
+        keyboard.append(row)
+    
+    keyboard.append([InlineKeyboardButton("✅ تموم شد", callback_data="interests_done")])
+    return InlineKeyboardMarkup(keyboard)
 
 # ============ هندلرهای ثبت‌نام ============
 async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
     user_id = update.effective_user.id
     user = get_user(user_id)
     
-    if user and user['is_banned']:
-        await update.message.reply_text("🚫 شما توسط مدیریت مسدود شده‌اید!")
-        return
-    
-    if user and user['is_setup_complete']:
+    if user and user[17]:
         await update.message.reply_text(
             f"🌟 به بات هم‌نوا خوش اومدی {update.effective_user.first_name}!",
             reply_markup=main_menu_keyboard()
@@ -374,30 +352,6 @@ async def age_max_input(update: Update, context: ContextTypes.DEFAULT_TYPE):
     
     await show_interests(update, context)
     return INTERESTS
-
-def get_interests_keyboard(selected=None):
-    if selected is None:
-        selected = []
-    
-    interests_list = [
-        "🎬 فیلم", "📚 کتاب", "🎵 موسیقی",
-        "🏋️ ورزش", "🍳 آشپزی", "🎮 بازی",
-        "🧳 سفر", "🌿 طبیعت", "✏️ نقاشی",
-        "💻 تکنولوژی", "🧘 مدیتیشن", "🐱 حیوانات"
-    ]
-    
-    keyboard = []
-    for i in range(0, len(interests_list), 3):
-        row = []
-        for item in interests_list[i:i+3]:
-            if item in selected:
-                row.append(InlineKeyboardButton(f"✅ {item}", callback_data=f"interest_{item}"))
-            else:
-                row.append(InlineKeyboardButton(f"⬜ {item}", callback_data=f"interest_{item}"))
-        keyboard.append(row)
-    
-    keyboard.append([InlineKeyboardButton("✅ تموم شد", callback_data="interests_done")])
-    return InlineKeyboardMarkup(keyboard)
 
 async def show_interests(update: Update, context: ContextTypes.DEFAULT_TYPE):
     if 'interests' not in context.user_data:
@@ -623,28 +577,23 @@ async def finish_registration(update: Update, context: ContextTypes.DEFAULT_TYPE
         'is_active': 1,
         'created_at': datetime.now(),
         'last_active': datetime.now(),
-        'is_setup_complete': 1,
-        'is_banned': 0,
-        'report_count': 0
+        'is_setup_complete': 1
     }
+    save_user(user_id, user_data)
     
-    if save_user(user_id, user_data):
-        context.user_data.clear()
-        
-        if update.callback_query:
-            query = update.callback_query
-            await query.edit_message_text(
-                "🎉 ثبت‌نام کامل شد!",
-                reply_markup=main_menu_keyboard()
-            )
-        else:
-            await update.message.reply_text(
-                "🎉 ثبت‌نام کامل شد!",
-                reply_markup=main_menu_keyboard()
-            )
+    context.user_data.clear()
+    
+    if update.callback_query:
+        query = update.callback_query
+        await query.edit_message_text(
+            "🎉 ثبت‌نام کامل شد!",
+            reply_markup=main_menu_keyboard()
+        )
     else:
-        await update.message.reply_text("❌ خطا در ذخیره اطلاعات!")
-    
+        await update.message.reply_text(
+            "🎉 ثبت‌نام کامل شد!",
+            reply_markup=main_menu_keyboard()
+        )
     return ConversationHandler.END
 
 # ============ جستجو ============
@@ -659,73 +608,65 @@ async def search(update: Update, context: ContextTypes.DEFAULT_TYPE):
         await query.edit_message_text("❌ اول ثبت‌نام کن!", reply_markup=main_menu_keyboard())
         return
     
-    if user['is_banned']:
-        await query.edit_message_text("🚫 شما مسدود شده‌اید!", reply_markup=main_menu_keyboard())
-        return
-    
     cleanup_expired_chats()
     
-    try:
-        week_ago = datetime.now() - timedelta(days=7)
-        rejected = db.fetchall(
-            "SELECT rejected_user_id FROM rejected WHERE user_id=? AND rejected_at > ?",
-            (user_id, week_ago)
+    conn = sqlite3.connect('matchbot.db')
+    c = conn.cursor()
+    
+    week_ago = datetime.now() - timedelta(days=7)
+    c.execute("SELECT rejected_user_id FROM rejected WHERE user_id=? AND rejected_at > ?", (user_id, week_ago))
+    rejected = [row[0] for row in c.fetchall()]
+    
+    c.execute("SELECT user2 FROM chats WHERE user1=? AND is_active=1", (user_id,))
+    active_chats1 = [row[0] for row in c.fetchall()]
+    c.execute("SELECT user1 FROM chats WHERE user2=? AND is_active=1", (user_id,))
+    active_chats2 = [row[0] for row in c.fetchall()]
+    active_chats = active_chats1 + active_chats2
+    
+    c.execute("SELECT blocked_id FROM blocks WHERE blocker_id=?", (user_id,))
+    blocked_by_me = [row[0] for row in c.fetchall()]
+    c.execute("SELECT blocker_id FROM blocks WHERE blocked_id=?", (user_id,))
+    blocked_me = [row[0] for row in c.fetchall()]
+    blocked_users = blocked_by_me + blocked_me
+    
+    query_str = """
+        SELECT * FROM users 
+        WHERE user_id != ? 
+        AND is_active = 1 
+        AND is_setup_complete = 1
+        AND age BETWEEN ? AND ?
+        AND purpose = ?
+    """
+    params = [user_id, user['age_min'], user['age_max'], user['purpose']]
+    
+    if user['privacy_visibility'] == 'same_city':
+        query_str += " AND city = ?"
+        params.append(user['city'])
+    
+    if rejected:
+        query_str += f" AND user_id NOT IN ({','.join(['?']*len(rejected))})"
+        params.extend(rejected)
+    if active_chats:
+        query_str += f" AND user_id NOT IN ({','.join(['?']*len(active_chats))})"
+        params.extend(active_chats)
+    if blocked_users:
+        query_str += f" AND user_id NOT IN ({','.join(['?']*len(blocked_users))})"
+        params.extend(blocked_users)
+    
+    c.execute(query_str, params)
+    candidates = c.fetchall()
+    conn.close()
+    
+    if not candidates:
+        await query.edit_message_text(
+            "😔 کسی پیدا نشد!",
+            reply_markup=main_menu_keyboard()
         )
-        rejected_ids = [row['rejected_user_id'] for row in rejected]
-        
-        active_chats = db.fetchall(
-            "SELECT user2 FROM chats WHERE user1=? AND is_active=1 UNION SELECT user1 FROM chats WHERE user2=? AND is_active=1",
-            (user_id, user_id)
-        )
-        active_ids = [row[0] for row in active_chats]
-        
-        blocked = db.fetchall(
-            "SELECT blocked_id FROM blocks WHERE blocker_id=? UNION SELECT blocker_id FROM blocks WHERE blocked_id=?",
-            (user_id, user_id)
-        )
-        blocked_ids = [row[0] for row in blocked]
-        
-        query_str = """
-            SELECT * FROM users 
-            WHERE user_id != ? 
-            AND is_active = 1 
-            AND is_setup_complete = 1
-            AND is_banned = 0
-            AND age BETWEEN ? AND ?
-            AND purpose = ?
-        """
-        params = [user_id, user['age_min'], user['age_max'], user['purpose']]
-        
-        if user['privacy_visibility'] == 'same_city':
-            query_str += " AND city = ?"
-            params.append(user['city'])
-        
-        if rejected_ids:
-            query_str += f" AND user_id NOT IN ({','.join(['?']*len(rejected_ids))})"
-            params.extend(rejected_ids)
-        if active_ids:
-            query_str += f" AND user_id NOT IN ({','.join(['?']*len(active_ids))})"
-            params.extend(active_ids)
-        if blocked_ids:
-            query_str += f" AND user_id NOT IN ({','.join(['?']*len(blocked_ids))})"
-            params.extend(blocked_ids)
-        
-        candidates = db.fetchall(query_str, tuple(params))
-        
-        if not candidates:
-            await query.edit_message_text(
-                "😔 کسی پیدا نشد!",
-                reply_markup=main_menu_keyboard()
-            )
-            return
-        
-        context.user_data['candidates'] = candidates
-        context.user_data['candidate_index'] = 0
-        await show_candidate(update, context)
-        
-    except Exception as e:
-        logger.error(f"Search error: {e}")
-        await query.edit_message_text("❌ خطا در جستجو!", reply_markup=main_menu_keyboard())
+        return
+    
+    context.user_data['candidates'] = candidates
+    context.user_data['candidate_index'] = 0
+    await show_candidate(update, context)
 
 async def show_candidate(update: Update, context: ContextTypes.DEFAULT_TYPE):
     query = update.callback_query
@@ -739,17 +680,17 @@ async def show_candidate(update: Update, context: ContextTypes.DEFAULT_TYPE):
         return
     
     candidate = candidates[index]
-    user_dict = dict(candidate)
+    user_dict = get_user_dict(candidate[0])
     
     message = f"👤 کاربر {index+1} از {len(candidates)}\n\n"
     message += f"سن: {user_dict['age'] if user_dict['privacy_age'] else '❌ مخفی'}\n"
     message += f"شهر: {user_dict['city'] if user_dict['privacy_city'] else '❌ مخفی'}\n"
     message += f"هدف: {user_dict['purpose']}\n"
-    message += f"وضعیت: {user_dict['job_status']}\n"
+    message += f"وضعیت: {user_dict['job_status']}"
     
     interests = json.loads(user_dict['interests']) if user_dict['interests'] else []
     if interests:
-        message += f"🎨 علایق: {', '.join(interests[:3])}"
+        message += f"\n🎨 علایق: {', '.join(interests[:3])}"
         if len(interests) > 3:
             message += f" +{len(interests)-3} مورد دیگر"
     
@@ -777,53 +718,49 @@ async def candidate_action(update: Update, context: ContextTypes.DEFAULT_TYPE):
     user_id = update.effective_user.id
     
     if action == "like":
-        try:
-            existing = db.fetchone(
-                "SELECT * FROM requests WHERE from_user=? AND to_user=? AND status='pending'",
-                (user_id, target_id)
-            )
+        conn = sqlite3.connect('matchbot.db')
+        c = conn.cursor()
+        
+        c.execute("SELECT * FROM requests WHERE from_user=? AND to_user=? AND status='pending'", (user_id, target_id))
+        if not c.fetchone():
+            c.execute("""
+                INSERT INTO requests (from_user, to_user, created_at, expires_at)
+                VALUES (?, ?, ?, ?)
+            """, (user_id, target_id, datetime.now(), datetime.now() + timedelta(days=3)))
+            conn.commit()
             
-            if not existing:
-                db.execute("""
-                    INSERT INTO requests (from_user, to_user, created_at, expires_at)
-                    VALUES (?, ?, ?, ?)
-                """, (user_id, target_id, datetime.now(), datetime.now() + timedelta(days=3)))
-                
-                try:
-                    target_user = get_user_dict(target_id)
-                    if target_user:
-                        await context.bot.send_message(
-                            target_id,
-                            f"📩 یه نفر به شما علاقه نشان داد!",
-                            reply_markup=InlineKeyboardMarkup([
-                                [InlineKeyboardButton("👀 مشاهده", callback_data=f"view_{user_id}")],
-                                [InlineKeyboardButton("✅ تایید", callback_data=f"accept_{user_id}")],
-                                [InlineKeyboardButton("❌ رد", callback_data=f"reject_{user_id}")]
-                            ])
-                        )
-                except Exception as e:
-                    logger.error(f"Error sending notification: {e}")
-            
-            await query.edit_message_text("✅ درخواست ارسال شد!", reply_markup=main_menu_keyboard())
-            
-        except Exception as e:
-            logger.error(f"Like error: {e}")
-            await query.edit_message_text("❌ خطا!", reply_markup=main_menu_keyboard())
+            try:
+                target_user = get_user_dict(target_id)
+                if target_user:
+                    await context.bot.send_message(
+                        target_id,
+                        f"📩 یه نفر به شما علاقه نشان داد!",
+                        reply_markup=InlineKeyboardMarkup([
+                            [InlineKeyboardButton("👀 مشاهده", callback_data=f"view_{user_id}")],
+                            [InlineKeyboardButton("✅ تایید", callback_data=f"accept_{user_id}")],
+                            [InlineKeyboardButton("❌ رد", callback_data=f"reject_{user_id}")]
+                        ])
+                    )
+            except Exception as e:
+                logger.error(f"Error sending notification: {e}")
+        
+        conn.close()
+        
+        await query.edit_message_text("✅ درخواست ارسال شد!", reply_markup=main_menu_keyboard())
     
     elif action == "dislike":
-        try:
-            db.execute("""
-                INSERT OR REPLACE INTO rejected (user_id, rejected_user_id, rejected_at)
-                VALUES (?, ?, ?)
-            """, (user_id, target_id, datetime.now()))
-            
-            await query.edit_message_text("✅ رد شد!", reply_markup=None)
-            context.user_data['candidate_index'] = context.user_data.get('candidate_index', 0) + 1
-            await show_candidate(update, context)
-            
-        except Exception as e:
-            logger.error(f"Dislike error: {e}")
-            await query.edit_message_text("❌ خطا!", reply_markup=main_menu_keyboard())
+        conn = sqlite3.connect('matchbot.db')
+        c = conn.cursor()
+        c.execute("""
+            INSERT OR REPLACE INTO rejected (user_id, rejected_user_id, rejected_at)
+            VALUES (?, ?, ?)
+        """, (user_id, target_id, datetime.now()))
+        conn.commit()
+        conn.close()
+        
+        await query.edit_message_text("✅ رد شد!", reply_markup=None)
+        context.user_data['candidate_index'] = context.user_data.get('candidate_index', 0) + 1
+        await show_candidate(update, context)
     
     elif action == "more":
         target_user = get_user_dict(target_id)
@@ -905,79 +842,79 @@ async def handle_request(update: Update, context: ContextTypes.DEFAULT_TYPE):
     
     current_user = update.effective_user.id
     
-    try:
-        request = db.fetchone(
-            "SELECT * FROM requests WHERE from_user=? AND to_user=? AND status='pending'",
-            (user_id, current_user)
+    conn = sqlite3.connect('matchbot.db')
+    c = conn.cursor()
+    
+    c.execute("SELECT * FROM requests WHERE from_user=? AND to_user=? AND status='pending'", (user_id, current_user))
+    request_exists = c.fetchone()
+    
+    if not request_exists:
+        await query.edit_message_text("❌ درخواست وجود ندارد!", reply_markup=main_menu_keyboard())
+        conn.close()
+        return
+    
+    if action == "accept":
+        c.execute("""
+            UPDATE requests SET status='accepted' 
+            WHERE from_user=? AND to_user=? AND status='pending'
+        """, (user_id, current_user))
+        
+        c.execute("""
+            INSERT INTO chats (user1, user2, match_date, expiry_date)
+            VALUES (?, ?, ?, ?)
+        """, (user_id, current_user, datetime.now(), datetime.now() + timedelta(days=3)))
+        
+        chat_id = c.lastrowid
+        conn.commit()
+        conn.close()
+        
+        chat_rules = (
+            "📋 **قوانین چت**\n\n"
+            "🔒 حریم خصوصی:\n"
+            "• اطلاعات شخصی خود را به اشتراک نگذارید.\n\n"
+            "🤝 ادب و احترام:\n"
+            "• با احترام صحبت کنید.\n\n"
+            "🚫 مزاحمت ممنوع!\n"
+            "• در صورت مزاحمت، بلاک کنید.\n\n"
+            "💡 این چت ۳ روز اعتبار دارد."
         )
         
-        if not request:
-            await query.edit_message_text("❌ درخواست وجود ندارد!", reply_markup=main_menu_keyboard())
-            return
-        
-        if action == "accept":
-            db.execute("""
-                UPDATE requests SET status='accepted' 
-                WHERE from_user=? AND to_user=? AND status='pending'
-            """, (user_id, current_user))
-            
-            db.execute("""
-                INSERT INTO chats (user1, user2, match_date, expiry_date, last_message_at)
-                VALUES (?, ?, ?, ?, ?)
-            """, (user_id, current_user, datetime.now(), 
-                  datetime.now() + timedelta(days=3), datetime.now()))
-            
-            chat_id = db.execute("SELECT last_insert_rowid()").fetchone()[0]
-            
-            chat_rules = (
-                "📋 **قوانین چت**\n\n"
-                "🔒 حریم خصوصی:\n"
-                "• اطلاعات شخصی خود را به اشتراک نگذارید.\n\n"
-                "🤝 ادب و احترام:\n"
-                "• با احترام صحبت کنید.\n\n"
-                "🚫 مزاحمت ممنوع!\n"
-                "• در صورت مزاحمت، بلاک کنید.\n\n"
-                "💡 این چت ۳ روز اعتبار دارد."
-            )
-            
-            for user in [user_id, current_user]:
-                try:
-                    await context.bot.send_message(
-                        user,
-                        chat_rules,
-                        parse_mode='Markdown',
-                        reply_markup=InlineKeyboardMarkup([
-                            [InlineKeyboardButton("💬 شروع چت", callback_data=f"chat_{chat_id}")]
-                        ])
-                    )
-                except Exception as e:
-                    logger.error(f"Error sending rules: {e}")
-            
-            await query.edit_message_text(
-                "🎉 همدیگرو پسندیدین! قوانین چت ارسال شد.",
-                reply_markup=main_menu_keyboard()
-            )
-        
-        elif action == "reject":
-            db.execute("""
-                UPDATE requests SET status='rejected' 
-                WHERE from_user=? AND to_user=? AND status='pending'
-            """, (user_id, current_user))
-            
+        for user in [user_id, current_user]:
             try:
                 await context.bot.send_message(
-                    user_id,
-                    "😔 طرف مقابل درخواست شما رو رد کرد!",
-                    reply_markup=main_menu_keyboard()
+                    user,
+                    chat_rules,
+                    parse_mode='Markdown',
+                    reply_markup=InlineKeyboardMarkup([
+                        [InlineKeyboardButton("💬 شروع چت", callback_data=f"chat_{chat_id}")]
+                    ])
                 )
-            except:
-                pass
-            
-            await query.edit_message_text("🙅 درخواست رد شد!", reply_markup=main_menu_keyboard())
-            
-    except Exception as e:
-        logger.error(f"Request error: {e}")
-        await query.edit_message_text("❌ خطا!", reply_markup=main_menu_keyboard())
+            except Exception as e:
+                logger.error(f"Error sending rules: {e}")
+        
+        await query.edit_message_text(
+            "🎉 همدیگرو پسندیدین! قوانین چت ارسال شد.",
+            reply_markup=main_menu_keyboard()
+        )
+    
+    elif action == "reject":
+        c.execute("""
+            UPDATE requests SET status='rejected' 
+            WHERE from_user=? AND to_user=? AND status='pending'
+        """, (user_id, current_user))
+        conn.commit()
+        conn.close()
+        
+        try:
+            await context.bot.send_message(
+                user_id,
+                "😔 طرف مقابل درخواست شما رو رد کرد!",
+                reply_markup=main_menu_keyboard()
+            )
+        except:
+            pass
+        
+        await query.edit_message_text("🙅 درخواست رد شد!", reply_markup=main_menu_keyboard())
 
 # ============ چت ============
 async def start_chat(update: Update, context: ContextTypes.DEFAULT_TYPE):
@@ -990,45 +927,41 @@ async def start_chat(update: Update, context: ContextTypes.DEFAULT_TYPE):
         await query.edit_message_text("❌ خطا!", reply_markup=main_menu_keyboard())
         return
     
+    conn = sqlite3.connect('matchbot.db')
+    c = conn.cursor()
+    c.execute("SELECT user1, user2, is_active, blocked_by FROM chats WHERE id=?", (chat_id,))
+    chat = c.fetchone()
+    conn.close()
+    
+    if not chat or not chat[2]:
+        await query.edit_message_text("❌ چت فعال نیست!", reply_markup=main_menu_keyboard())
+        return
+    
+    current_user = update.effective_user.id
+    
+    if chat[3] and chat[3] != current_user:
+        await query.edit_message_text("🚫 شما بلاک شده‌اید!", reply_markup=main_menu_keyboard())
+        return
+    
+    if current_user not in [chat[0], chat[1]]:
+        await query.edit_message_text("❌ دسترسی ندارید!", reply_markup=main_menu_keyboard())
+        return
+    
+    other_user = chat[1] if chat[0] == current_user else chat[0]
+    
+    context.user_data.clear()
+    context.user_data['active_chat'] = chat_id
+    context.user_data['chat_partner'] = other_user
+    
+    await query.message.reply_text(
+        "💬 چت شروع شد!",
+        reply_markup=chat_keyboard(other_user)
+    )
+    
     try:
-        chat = db.fetchone(
-            "SELECT user1, user2, is_active, blocked_by FROM chats WHERE id=?",
-            (chat_id,)
-        )
-        
-        if not chat or not chat['is_active']:
-            await query.edit_message_text("❌ چت فعال نیست!", reply_markup=main_menu_keyboard())
-            return
-        
-        current_user = update.effective_user.id
-        
-        if chat['blocked_by'] and chat['blocked_by'] != current_user:
-            await query.edit_message_text("🚫 شما بلاک شده‌اید!", reply_markup=main_menu_keyboard())
-            return
-        
-        if current_user not in [chat['user1'], chat['user2']]:
-            await query.edit_message_text("❌ دسترسی ندارید!", reply_markup=main_menu_keyboard())
-            return
-        
-        other_user = chat['user2'] if chat['user1'] == current_user else chat['user1']
-        
-        context.user_data.clear()
-        context.user_data['active_chat'] = chat_id
-        context.user_data['chat_partner'] = other_user
-        
-        await query.message.reply_text(
-            "💬 چت شروع شد!",
-            reply_markup=chat_keyboard(other_user)
-        )
-        
-        try:
-            await query.message.delete()
-        except:
-            pass
-            
-    except Exception as e:
-        logger.error(f"Start chat error: {e}")
-        await query.edit_message_text("❌ خطا!", reply_markup=main_menu_keyboard())
+        await query.message.delete()
+    except:
+        pass
 
 async def show_chats(update: Update, context: ContextTypes.DEFAULT_TYPE):
     query = update.callback_query
@@ -1037,12 +970,15 @@ async def show_chats(update: Update, context: ContextTypes.DEFAULT_TYPE):
     user_id = update.effective_user.id
     cleanup_expired_chats()
     
-    chats = db.fetchall("""
-        SELECT id, user1, user2, last_message_at 
-        FROM chats 
+    conn = sqlite3.connect('matchbot.db')
+    c = conn.cursor()
+    c.execute("""
+        SELECT id, user1, user2 FROM chats 
         WHERE (user1=? OR user2=?) AND is_active=1
-        ORDER BY last_message_at DESC
+        ORDER BY match_date DESC
     """, (user_id, user_id))
+    chats = c.fetchall()
+    conn.close()
     
     if not chats:
         await query.edit_message_text("❌ چت فعالی ندارید!", reply_markup=main_menu_keyboard())
@@ -1050,14 +986,13 @@ async def show_chats(update: Update, context: ContextTypes.DEFAULT_TYPE):
     
     keyboard = []
     for chat in chats:
-        other_user = chat['user2'] if chat['user1'] == user_id else chat['user1']
+        other_user = chat[2] if chat[1] == user_id else chat[1]
         other = get_user_dict(other_user)
         if other:
-            last_msg = f" - {chat['last_message_at'][:16]}" if chat['last_message_at'] else ""
             keyboard.append([
                 InlineKeyboardButton(
-                    f"💬 {other['gender']} {other['age']}ساله{last_msg}",
-                    callback_data=f"switch_chat_{chat['id']}"
+                    f"💬 {other['gender']} {other['age']}ساله",
+                    callback_data=f"switch_chat_{chat[0]}"
                 )
             ])
     
@@ -1078,17 +1013,18 @@ async def switch_chat(update: Update, context: ContextTypes.DEFAULT_TYPE):
         await query.edit_message_text("❌ خطا!", reply_markup=main_menu_keyboard())
         return
     
-    chat = db.fetchone(
-        "SELECT user1, user2, is_active, blocked_by FROM chats WHERE id=?",
-        (chat_id,)
-    )
+    conn = sqlite3.connect('matchbot.db')
+    c = conn.cursor()
+    c.execute("SELECT user1, user2, is_active, blocked_by FROM chats WHERE id=?", (chat_id,))
+    chat = c.fetchone()
+    conn.close()
     
-    if not chat or not chat['is_active']:
+    if not chat or not chat[2]:
         await query.edit_message_text("❌ چت فعال نیست!", reply_markup=main_menu_keyboard())
         return
     
     current_user = update.effective_user.id
-    other_user = chat['user2'] if chat['user1'] == current_user else chat['user1']
+    other_user = chat[1] if chat[0] == current_user else chat[0]
     
     context.user_data['active_chat'] = chat_id
     context.user_data['chat_partner'] = other_user
@@ -1105,14 +1041,14 @@ async def handle_chat_message(update: Update, context: ContextTypes.DEFAULT_TYPE
     user_id = update.effective_user.id
     
     user = get_user(user_id)
-    if user and not user['is_setup_complete']:
+    if user and not user[17]:
         return
     
     if 'editing_field' in context.user_data:
         return
     
     if 'active_chat' not in context.user_data:
-        if user and user['is_setup_complete']:
+        if user and user[17]:
             await update.message.reply_text(
                 "❌ شما در چتی نیستید!",
                 reply_markup=main_menu_keyboard()
@@ -1122,24 +1058,23 @@ async def handle_chat_message(update: Update, context: ContextTypes.DEFAULT_TYPE
     chat_id = context.user_data['active_chat']
     sender_id = user_id
     
-    chat = db.fetchone(
-        "SELECT user1, user2, is_active, blocked_by FROM chats WHERE id=?",
-        (chat_id,)
-    )
+    conn = sqlite3.connect('matchbot.db')
+    c = conn.cursor()
+    c.execute("SELECT user1, user2, is_active, blocked_by FROM chats WHERE id=?", (chat_id,))
+    chat = c.fetchone()
+    conn.close()
     
-    if not chat or not chat['is_active']:
+    if not chat or not chat[2]:
         await update.message.reply_text("❌ چت فعال نیست!", reply_markup=main_menu_keyboard())
         context.user_data.pop('active_chat', None)
         return
     
-    if chat['blocked_by'] and chat['blocked_by'] != sender_id:
+    if chat[3] and chat[3] != sender_id:
         await update.message.reply_text("🚫 شما بلاک شده‌اید!", reply_markup=main_menu_keyboard())
         context.user_data.pop('active_chat', None)
         return
     
-    partner_id = chat['user2'] if chat['user1'] == sender_id else chat['user1']
-    
-    db.execute("UPDATE chats SET last_message_at=? WHERE id=?", (datetime.now(), chat_id))
+    partner_id = chat[1] if chat[0] == sender_id else chat[0]
     
     try:
         if update.message.photo:
@@ -1201,7 +1136,7 @@ async def handle_chat_message(update: Update, context: ContextTypes.DEFAULT_TYPE
             await update.message.reply_text("❌ این نوع پیام پشتیبانی نمی‌شه!")
             
     except Exception as e:
-        logger.error(f"Send message error: {e}")
+        logger.error(f"Send error: {e}")
         await update.message.reply_text(f"❌ ارسال ناموفق!")
 
 # ============ سایر هندلرها ============
@@ -1269,45 +1204,42 @@ async def block_reason(update: Update, context: ContextTypes.DEFAULT_TYPE):
     current_user = update.effective_user.id
     chat_id = context.user_data.get('active_chat')
     
+    conn = sqlite3.connect('matchbot.db')
+    c = conn.cursor()
+    c.execute("""
+        INSERT INTO blocks (blocker_id, blocked_id, reason, created_at)
+        VALUES (?, ?, ?, ?)
+    """, (current_user, user_id, reason, datetime.now()))
+    
+    if chat_id:
+        c.execute("UPDATE chats SET is_active=0, blocked_by=? WHERE id=?", (current_user, chat_id))
+    
+    conn.commit()
+    conn.close()
+    
+    reason_text = {
+        "abuse": "فحاشی",
+        "spam": "مزاحمت",
+        "fake": "کلاهبرداری",
+        "not_interested": "مورد پسندم نبود"
+    }.get(reason, "نامشخص")
+    
     try:
-        db.execute("""
-            INSERT INTO blocks (blocker_id, blocked_id, reason, created_at)
-            VALUES (?, ?, ?, ?)
-        """, (current_user, user_id, reason, datetime.now()))
-        
-        if chat_id:
-            db.execute(
-                "UPDATE chats SET is_active=0, blocked_by=? WHERE id=?",
-                (current_user, chat_id)
-            )
-        
-        reason_text = {
-            "abuse": "فحاشی",
-            "spam": "مزاحمت",
-            "fake": "کلاهبرداری",
-            "not_interested": "مورد پسندم نبود"
-        }.get(reason, "نامشخص")
-        
-        try:
-            await context.bot.send_message(
-                user_id,
-                f"🚫 شما توسط یک کاربر بلاک شدید!\nدلیل: {reason_text}",
-                reply_markup=main_menu_keyboard()
-            )
-        except:
-            pass
-        
-        context.user_data.pop('active_chat', None)
-        context.user_data.pop('chat_partner', None)
-        
-        await query.edit_message_text(
-            f"✅ کاربر بلاک شد!\nدلیل: {reason_text}",
+        await context.bot.send_message(
+            user_id,
+            f"🚫 شما توسط یک کاربر بلاک شدید!\nدلیل: {reason_text}",
             reply_markup=main_menu_keyboard()
         )
-        
-    except Exception as e:
-        logger.error(f"Block error: {e}")
-        await query.edit_message_text("❌ خطا!", reply_markup=main_menu_keyboard())
+    except:
+        pass
+    
+    context.user_data.pop('active_chat', None)
+    context.user_data.pop('chat_partner', None)
+    
+    await query.edit_message_text(
+        f"✅ کاربر بلاک شد!\nدلیل: {reason_text}",
+        reply_markup=main_menu_keyboard()
+    )
 
 async def close_chat(update: Update, context: ContextTypes.DEFAULT_TYPE):
     query = update.callback_query
@@ -1607,11 +1539,15 @@ async def my_requests(update: Update, context: ContextTypes.DEFAULT_TYPE):
     
     user_id = update.effective_user.id
     
-    received = db.fetchall("""
+    conn = sqlite3.connect('matchbot.db')
+    c = conn.cursor()
+    c.execute("""
         SELECT from_user, created_at FROM requests 
         WHERE to_user=? AND status='pending'
         ORDER BY created_at DESC
     """, (user_id,))
+    received = c.fetchall()
+    conn.close()
     
     if not received:
         await query.edit_message_text("📋 درخواست جدیدی ندارید!", reply_markup=main_menu_keyboard())
@@ -1621,7 +1557,7 @@ async def my_requests(update: Update, context: ContextTypes.DEFAULT_TYPE):
     keyboard = []
     
     for req in received[:5]:
-        from_user = get_user_dict(req['from_user'])
+        from_user = get_user_dict(req[0])
         if from_user:
             message += f"👤 سن: {from_user['age'] if from_user['privacy_age'] else '❌'}\n"
             message += f"📍 شهر: {from_user['city'] if from_user['privacy_city'] else '❌'}\n"
@@ -1641,20 +1577,14 @@ async def stats(update: Update, context: ContextTypes.DEFAULT_TYPE):
     
     user_id = update.effective_user.id
     
-    sent = db.fetchone(
-        "SELECT COUNT(*) FROM requests WHERE from_user=? AND status='pending'",
-        (user_id,)
-    )[0]
+    conn = sqlite3.connect('matchbot.db')
+    c = conn.cursor()
     
-    received = db.fetchone(
-        "SELECT COUNT(*) FROM requests WHERE to_user=? AND status='pending'",
-        (user_id,)
-    )[0]
+    sent = c.execute("SELECT COUNT(*) FROM requests WHERE from_user=? AND status='pending'", (user_id,)).fetchone()[0]
+    received = c.execute("SELECT COUNT(*) FROM requests WHERE to_user=? AND status='pending'", (user_id,)).fetchone()[0]
+    active = c.execute("SELECT COUNT(*) FROM chats WHERE (user1=? OR user2=?) AND is_active=1", (user_id, user_id)).fetchone()[0]
     
-    active = db.fetchone(
-        "SELECT COUNT(*) FROM chats WHERE (user1=? OR user2=?) AND is_active=1",
-        (user_id, user_id)
-    )[0]
+    conn.close()
     
     await query.edit_message_text(
         f"📊 آمار شما:\n\n"
@@ -1701,13 +1631,12 @@ async def help_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
 # ============ تابع اصلی ربات ============
 def run_bot():
-    """اجرای ربات تلگرام"""
     try:
         logger.info("🚀 Starting Telegram bot...")
+        init_db()
         
         application = Application.builder().token(TOKEN).build()
         
-        # ثبت هندلرها
         conv_handler = ConversationHandler(
             entry_points=[CommandHandler('start', start)],
             states={
@@ -1734,7 +1663,6 @@ def run_bot():
         )
         application.add_handler(conv_handler)
         
-        # منوهای اصلی
         application.add_handler(CallbackQueryHandler(search, pattern='^search$'))
         application.add_handler(CallbackQueryHandler(edit_profile, pattern='^edit_profile$'))
         application.add_handler(CallbackQueryHandler(my_requests, pattern='^my_requests$'))
@@ -1744,34 +1672,28 @@ def run_bot():
         application.add_handler(CallbackQueryHandler(help_command, pattern='^help$'))
         application.add_handler(CallbackQueryHandler(back_to_menu, pattern='^back_to_menu$'))
         
-        # چت‌ها
         application.add_handler(CallbackQueryHandler(show_chats, pattern='^show_chats$'))
         application.add_handler(CallbackQueryHandler(switch_chat, pattern='^switch_chat_'))
         
-        # ویرایش پروفایل
         application.add_handler(CallbackQueryHandler(edit_profile_field, pattern='^edit_(gender|age|purpose|city|interests|job|description|photo)$'))
         application.add_handler(CallbackQueryHandler(update_profile_field, pattern='^update_(gender_|purpose_|job_|interest_|interests_done)'))
         application.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, handle_profile_text_input))
         application.add_handler(MessageHandler(filters.PHOTO, handle_profile_text_input))
         
-        # جستجو و درخواست‌ها
         application.add_handler(CallbackQueryHandler(candidate_action, pattern='^(like|dislike|more)_'))
         application.add_handler(CallbackQueryHandler(show_candidate, pattern='^next_candidate$'))
         application.add_handler(CallbackQueryHandler(back_to_candidate, pattern='^back_'))
         application.add_handler(CallbackQueryHandler(view_requester, pattern='^view_'))
         application.add_handler(CallbackQueryHandler(handle_request, pattern='^(accept|reject)_'))
         
-        # چت
         application.add_handler(CallbackQueryHandler(start_chat, pattern='^chat_'))
         application.add_handler(CallbackQueryHandler(request_photo, pattern='^photo_'))
         application.add_handler(CallbackQueryHandler(block_user, pattern='^block_'))
         application.add_handler(CallbackQueryHandler(block_reason, pattern='^block_reason_'))
         application.add_handler(CallbackQueryHandler(close_chat, pattern='^close_chat$'))
         
-        # حریم خصوصی
         application.add_handler(CallbackQueryHandler(privacy_toggle, pattern='^privacy_toggle_(age|city|change_visibility)$'))
         
-        # هندلر اصلی پیام‌ها
         application.add_handler(
             MessageHandler(filters.ALL & ~filters.COMMAND, handle_chat_message),
             group=1
@@ -1784,9 +1706,9 @@ def run_bot():
         logger.error(f"❌ Bot error: {e}")
         logger.error(traceback.format_exc())
 
-# ============ نقطه ورود اصلی ============
+# ============ نقطه ورود ============
 if __name__ == '__main__':
-    # اجرای ربات در یک ترد جداگانه
+    # اجرای ربات در ترد جداگانه
     bot_thread = threading.Thread(target=run_bot, daemon=True)
     bot_thread.start()
     logger.info("✅ Bot thread started")
