@@ -2,7 +2,6 @@ import os
 import threading
 import logging
 from flask import Flask, jsonify
-from bot import main as start_bot  # فرض میکنیم فایل اصلی bot.py هست
 
 # تنظیم لاگ
 logging.basicConfig(level=logging.INFO)
@@ -34,6 +33,8 @@ def run_bot():
     """اجرای ربات در یک ترد جداگانه"""
     try:
         logger.info("🚀 Starting bot thread...")
+        # ایمپورت ربات اینجا انجام میشه
+        from bot import main as start_bot
         start_bot()
     except Exception as e:
         logger.error(f"❌ Bot thread error: {e}")
