@@ -573,6 +573,9 @@ async def finish_registration(update: Update, context: ContextTypes.DEFAULT_TYPE
     }
     save_user(user_id, user_data)
     
+    # ============ پاک کردن dataهای ثبت‌نام ============
+    context.user_data.clear()
+    
     if isinstance(update, Update) and update.callback_query:
         query = update.callback_query
         await query.edit_message_text(
@@ -1013,8 +1016,22 @@ async def start_chat(update: Update, context: ContextTypes.DEFAULT_TYPE):
     
     logger.info(f"💬 Starting chat: chat_id={chat_id}, user={current_user}, partner={other_user}")
     
+    # ============ تنظیم context.user_data برای چت ============
     context.user_data['active_chat'] = chat_id
     context.user_data['chat_partner'] = other_user
+    
+    # ============ حذف هرگونه داده قبلی که ممکنه تداخل داشته باشه ============
+    context.user_data.pop('editing_field', None)
+    context.user_data.pop('gender', None)
+    context.user_data.pop('age', None)
+    context.user_data.pop('purpose', None)
+    context.user_data.pop('city', None)
+    context.user_data.pop('age_min', None)
+    context.user_data.pop('age_max', None)
+    context.user_data.pop('interests', None)
+    context.user_data.pop('job_status', None)
+    context.user_data.pop('description', None)
+    context.user_data.pop('privacy', None)
     
     await query.message.reply_text(
         "💬 چت شروع شد!\n\n"
@@ -1031,8 +1048,8 @@ async def start_chat(update: Update, context: ContextTypes.DEFAULT_TYPE):
         await query.message.delete()
     except:
         pass
-
-# ============ هندلر اصلی چت - بدون فوروارد با شرط ثبت‌نام ============
+        
+# ============ هندلر اصلی چت - نسخه نهایی ============
 async def handle_chat_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
     logger.info(f"📩 handle_chat_message CALLED! user={update.effective_user.id}")
     
@@ -1040,36 +1057,51 @@ async def handle_chat_message(update: Update, context: ContextTypes.DEFAULT_TYPE
         logger.warning(f"❌ No message in update")
         return
     
-    # ============ مهم: اگر کاربر در حال ثبت‌نامه، هندلر رو نادیده بگیر ============
-    if 'editing_field' in context.user_data or 'gender' in context.user_data:
-        logger.info(f"⏭️ User is in registration/editing mode, skipping chat handler")
+    # ============ بررسی اینکه کاربر در حال ثبت‌نام یا ویرایش هست ============
+    # فقط اگر کاربر در حال تکمیل مراحل ثبت‌نام یا ویرایش باشه، هندلر رو نادیده بگیر
+    is_in_conversation = False
+    
+    # بررسی مراحل ثبت‌نام (با چک کردن اینکه آیا کاربر کامل ثبت‌نام کرده)
+    user = get_user(update.effective_user.id)
+    if user:
+        is_setup_complete = user[17]  # ستون is_setup_complete
+        if not is_setup_complete:
+            # کاربر هنوز ثبت‌نام کامل نکرده
+            logger.info(f"⏭️ User {update.effective_user.id} hasn't completed registration")
+            return
+    
+    # بررسی ویرایش پروفایل
+    if 'editing_field' in context.user_data:
+        logger.info(f"⏭️ User {update.effective_user.id} is in editing mode")
         return
     
-    logger.info(f"📩 Has text: {bool(update.message.text)}")
-    logger.info(f"📩 Has photo: {bool(update.message.photo)}")
-    logger.info(f"📩 Has sticker: {bool(update.message.sticker)}")
-    logger.info(f"📩 Has animation: {bool(update.message.animation)}")
-    logger.info(f"📩 Has video: {bool(update.message.video)}")
-    logger.info(f"📩 Has voice: {bool(update.message.voice)}")
-    logger.info(f"📩 Has audio: {bool(update.message.audio)}")
-    logger.info(f"📩 Has document: {bool(update.message.document)}")
-    
+    # ============ بررسی چت فعال ============
     if 'active_chat' not in context.user_data:
         logger.warning(f"❌ No active chat for user {update.effective_user.id}")
-        # اینجا پیام ارور رو حذف میکنیم تا با ثبت‌نام تداخل نداشته باشه
-        # await update.message.reply_text("❌ شما در هیچ چتی نیستی!", reply_markup=main_menu_keyboard())
+        # فقط اگر کاربر ثبت‌نام کامل کرده باشه پیام بده
+        if user and user[17]:
+            await update.message.reply_text(
+                "❌ شما در هیچ چتی نیستی!\nبرای شروع از گزینه جستجو استفاده کن.",
+                reply_markup=main_menu_keyboard()
+            )
         return
     
     chat_id = context.user_data['active_chat']
     sender_id = update.effective_user.id
     
+    # ============ بررسی اعتبار چت ============
     conn = sqlite3.connect('matchbot.db')
     c = conn.cursor()
     c.execute("SELECT user1, user2, is_active, blocked_by FROM chats WHERE id=?", (chat_id,))
     chat = c.fetchone()
     conn.close()
     
-    if not chat or not chat[2]:
+    if not chat:
+        await update.message.reply_text("❌ این چت وجود ندارد!", reply_markup=main_menu_keyboard())
+        context.user_data.pop('active_chat', None)
+        return
+    
+    if not chat[2]:  # is_active = 0
         await update.message.reply_text("❌ این چت فعال نیست!", reply_markup=main_menu_keyboard())
         context.user_data.pop('active_chat', None)
         return
