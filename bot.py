@@ -1613,6 +1613,7 @@ async def report_user(update: Update, context: ContextTypes.DEFAULT_TYPE):
     await query.edit_message_text("⚠️ دلیل گزارش:", reply_markup=InlineKeyboardMarkup(keyboard))
 
 async def report_reason(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """ثبت دلیل گزارش با ارسال تاریخچه چت به ادمین"""
     query = update.callback_query
     await query.answer()
     
@@ -1621,8 +1622,9 @@ async def report_reason(update: Update, context: ContextTypes.DEFAULT_TYPE):
         reason = parts[1]
         user_id = int(parts[2])
         chat_id = int(parts[3]) if len(parts) > 3 else None
-    except:
-        await query.edit_message_text("❌ خطا!", reply_markup=main_menu_keyboard())
+    except Exception as e:
+        logger.error(f"Error parsing report: {e}")
+        await query.edit_message_text("❌ خطا در پردازش!", reply_markup=main_menu_keyboard())
         return
     
     current_user = update.effective_user.id
@@ -1653,28 +1655,39 @@ async def report_reason(update: Update, context: ContextTypes.DEFAULT_TYPE):
                 (chat_id,)
             )
             if messages:
-                chat_history = "\n\n📝 **آخرین پیام‌های چت:**\n"
+                chat_history = "\n\n📝 **آخرین ۱۰ پیام چت:**\n"
+                chat_history += "─" * 30 + "\n"
                 for msg in reversed(messages):
-                    sender = "گزارش‌دهنده" if msg['sender_id'] == current_user else "گزارش‌شونده"
-                    chat_history += f"{sender}: {msg['message_text']}\n"
+                    sender_name = "گزارش‌دهنده" if msg['sender_id'] == current_user else "گزارش‌شونده"
+                    chat_history += f"👤 {sender_name}: {msg['message_text']}\n"
+                chat_history += "─" * 30
+            else:
+                chat_history = "\n\n📝 **تاریخچه چت:** خالی (پیامی یافت نشد)"
+        else:
+            chat_history = "\n\n📝 **تاریخچه چت:** موجود نیست (چت شناسایی نشد)"
         
         # ارسال گزارش کامل به ادمین
         if ADMIN_ID:
             try:
                 admin_msg = (
                     f"⚠️ **گزارش جدید تخلف** ⚠️\n\n"
+                    f"┌─────────────────\n"
+                    f"│ 📌 **شماره گزارش:** جدید\n"
+                    f"│ 📅 **زمان:** {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}\n"
+                    f"└─────────────────\n\n"
                     f"👤 **گزارش‌دهنده:**\n"
-                    f"   آیدی: `{current_user}`\n"
-                    f"   جنسیت: {reporter['gender'] if reporter else 'نامشخص'}\n"
-                    f"   سن: {reporter['age'] if reporter else 'نامشخص'}\n\n"
+                    f"   ├ آیدی: `{current_user}`\n"
+                    f"   ├ جنسیت: {reporter['gender'] if reporter else 'نامشخص'}\n"
+                    f"   └ سن: {reporter['age'] if reporter else 'نامشخص'}\n\n"
                     f"👤 **گزارش‌شونده:**\n"
-                    f"   آیدی: `{user_id}`\n"
-                    f"   جنسیت: {reported['gender'] if reported else 'نامشخص'}\n"
-                    f"   سن: {reported['age'] if reported else 'نامشخص'}\n\n"
+                    f"   ├ آیدی: `{user_id}`\n"
+                    f"   ├ جنسیت: {reported['gender'] if reported else 'نامشخص'}\n"
+                    f"   └ سن: {reported['age'] if reported else 'نامشخص'}\n\n"
                     f"📌 **دلیل گزارش:** {reason_text}\n"
-                    f"📅 **زمان:** {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}"
                     f"{chat_history}\n\n"
-                    f"🔹 **لطفاً بررسی کنید و تصمیم بگیرید:**"
+                    f"┌─────────────────\n"
+                    f"│ 🔹 **اقدامات:**\n"
+                    f"└─────────────────"
                 )
                 
                 await context.bot.send_message(
@@ -1692,6 +1705,18 @@ async def report_reason(update: Update, context: ContextTypes.DEFAULT_TYPE):
                 
             except Exception as e:
                 logger.error(f"Error sending report to admin: {e}")
+                try:
+                    # اگر پیام طولانی بود، خلاصه بفرست
+                    await context.bot.send_message(
+                        ADMIN_ID,
+                        f"⚠️ گزارش جدید: {current_user} -> {user_id} | {reason_text}",
+                        reply_markup=InlineKeyboardMarkup([
+                            [InlineKeyboardButton("✅ بلاک", callback_data=f"admin_block_from_report_{user_id}")],
+                            [InlineKeyboardButton("❌ رد", callback_data=f"admin_reject_report_{user_id}")]
+                        ])
+                    )
+                except:
+                    pass
         
         # پاسخ به کاربر
         reply_markup = chat_keyboard(user_id, chat_id) if chat_id else main_menu_keyboard()
@@ -1804,7 +1829,8 @@ async def admin_support(update: Update, context: ContextTypes.DEFAULT_TYPE):
     
     if not messages:
         await query.edit_message_text(
-            "📋 پیام جدیدی نیست!",
+            "📋 **پیام جدیدی نیست!**",
+            parse_mode='Markdown',
             reply_markup=admin_panel_keyboard()
         )
         return
@@ -1815,11 +1841,12 @@ async def admin_support(update: Update, context: ContextTypes.DEFAULT_TYPE):
     for msg in messages:
         user = get_user_dict(msg['user_id'])
         user_name = f"{user['gender'] if user else ''} {user['age'] if user else ''}" if user else 'نامشخص'
-        message += f"🆔 {msg['id']} - کاربر {msg['user_id']} ({user_name})\n"
-        message += f"📝 {msg['message'][:50]}...\n"
+        msg_preview = msg['message'][:40] + '...' if len(msg['message']) > 40 else msg['message']
+        message += f"🆔 {msg['id']} | کاربر {msg['user_id']} ({user_name})\n"
+        message += f"📝 {msg_preview}\n"
         message += f"📅 {msg['created_at'][:16]}\n\n"
         keyboard.append([
-            InlineKeyboardButton(f"💬 پاسخ", callback_data=f"admin_reply_{msg['user_id']}"),
+            InlineKeyboardButton(f"💬 پاسخ به {msg['user_id']}", callback_data=f"admin_reply_{msg['user_id']}"),
             InlineKeyboardButton(f"✅ بسته شد", callback_data=f"admin_close_support_{msg['id']}")
         ])
     
@@ -1832,7 +1859,7 @@ async def admin_support(update: Update, context: ContextTypes.DEFAULT_TYPE):
     )
 
 async def admin_reply(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    """ادمین به کاربر پاسخ میده"""
+    """ادمین به کاربر پاسخ میده - بدون نیاز به چت"""
     query = update.callback_query
     await query.answer()
     
@@ -1846,9 +1873,14 @@ async def admin_reply(update: Update, context: ContextTypes.DEFAULT_TYPE):
         await query.edit_message_text("❌ خطا!", reply_markup=admin_panel_keyboard())
         return
     
+    # ذخیره آیدی کاربر برای پاسخ
+    context.user_data['admin_reply_to'] = user_id
+    
     await query.edit_message_text(
-        f"📞 **پاسخ به کاربر `{user_id}`**\n\n"
-        "پیام پاسخ رو بنویس و ارسال کن:",
+        f"📞 **پاسخ به کاربر**\n\n"
+        f"آیدی کاربر: `{user_id}`\n\n"
+        "لطفاً پیام پاسخ رو بنویس و ارسال کن.\n"
+        "⚠️ پیام شما مستقیماً برای کاربر ارسال میشه.",
         parse_mode='Markdown',
         reply_markup=InlineKeyboardMarkup([
             [InlineKeyboardButton("🔙 برگشت", callback_data="admin_support")]
@@ -1857,22 +1889,30 @@ async def admin_reply(update: Update, context: ContextTypes.DEFAULT_TYPE):
     context.user_data['admin_reply_to'] = user_id
 
 async def admin_send_reply(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    """ارسال پاسخ ادمین به کاربر"""
+    """ارسال پاسخ ادمین به کاربر - بدون نیاز به چت"""
     if update.effective_user.id != ADMIN_ID:
         return
     
     user_id = context.user_data.get('admin_reply_to')
     if not user_id:
-        await update.message.reply_text("❌ لطفاً از منوی پشتیبانی استفاده کن!", reply_markup=admin_panel_keyboard())
+        await update.message.reply_text(
+            "❌ لطفاً از منوی پشتیبانی استفاده کن!",
+            reply_markup=admin_panel_keyboard()
+        )
         return
     
     reply_text = update.message.text
     
+    if not reply_text:
+        await update.message.reply_text("❌ لطفاً پیام بنویس!")
+        return
+    
     try:
+        # ارسال مستقیم به کاربر
         await context.bot.send_message(
             user_id,
-            f"📞 **پاسخ پشتیبانی**\n\n{reply_text}\n\n"
-            f"اگه سوال دیگه‌ای داری، باز هم میتونی از گزینه پشتیبانی استفاده کنی.",
+            f"📞 **پاسخ از پشتیبانی**\n\n{reply_text}\n\n"
+            f"اگه سوال دیگه‌ای داری، از گزینه پشتیبانی استفاده کن.",
             parse_mode='Markdown',
             reply_markup=main_menu_keyboard()
         )
@@ -1881,7 +1921,7 @@ async def admin_send_reply(update: Update, context: ContextTypes.DEFAULT_TYPE):
         db.execute("UPDATE support_messages SET status='replied' WHERE user_id=? AND status='pending'", (user_id,))
         
         await update.message.reply_text(
-            f"✅ پاسخ شما به کاربر `{user_id}` ارسال شد!",
+            f"✅ **پاسخ شما به کاربر `{user_id}` ارسال شد!**",
             reply_markup=admin_panel_keyboard()
         )
         context.user_data.pop('admin_reply_to', None)
@@ -1889,8 +1929,10 @@ async def admin_send_reply(update: Update, context: ContextTypes.DEFAULT_TYPE):
     except Exception as e:
         logger.error(f"Error sending admin reply: {e}")
         await update.message.reply_text(
-            f"❌ خطا در ارسال پاسخ به کاربر `{user_id}`!\n"
-            f"ممکن است کاربر ربات رو بلاک کرده باشد.",
+            f"❌ **خطا در ارسال پاسخ!**\n\n"
+            f"ممکن است کاربر ربات رو بلاک کرده باشد.\n"
+            f"آیدی کاربر: `{user_id}`",
+            parse_mode='Markdown',
             reply_markup=admin_panel_keyboard()
         )
         context.user_data.pop('admin_reply_to', None)
