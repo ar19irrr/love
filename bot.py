@@ -1630,7 +1630,6 @@ async def help_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
 # ============ تابع اصلی ربات ============
 def run_bot():
-    """اجرای ربات"""
     try:
         logger.info("🚀 Starting Telegram bot...")
         init_db()
