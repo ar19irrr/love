@@ -1041,46 +1041,61 @@ async def handle_chat_message(update: Update, context: ContextTypes.DEFAULT_TYPE
     logger.info(f"🔍 sender={sender_id}, partner={partner_id}")
     
     try:
-        # ============ همه نوع پیام ============
+        # ============ متن = فوروارد ============
         if update.message.text:
-            await context.bot.send_message(partner_id, f"📩 {update.message.text}")
+            await context.bot.forward_message(
+                chat_id=partner_id,
+                from_chat_id=sender_id,
+                message_id=update.message.message_id
+            )
             await update.message.reply_text("✅")
-            logger.info(f"✅ Text sent to {partner_id}")
+            logger.info(f"✅ Text forwarded to {partner_id}")
             
+        # ============ عکس = فوروارد ============
         elif update.message.photo:
-            await context.bot.send_photo(partner_id, update.message.photo[-1].file_id, caption="📸 عکس")
+            await context.bot.forward_message(
+                chat_id=partner_id,
+                from_chat_id=sender_id,
+                message_id=update.message.message_id
+            )
             await update.message.reply_text("✅")
-            logger.info(f"✅ Photo sent to {partner_id}")
+            logger.info(f"✅ Photo forwarded to {partner_id}")
             
+        # ============ استیکر = ارسال مجدد ============
         elif update.message.sticker:
             await context.bot.send_sticker(partner_id, update.message.sticker.file_id)
             await update.message.reply_text("✅")
             logger.info(f"✅ Sticker sent to {partner_id}")
             
+        # ============ گیف = ارسال مجدد ============
         elif update.message.animation:
             await context.bot.send_animation(partner_id, update.message.animation.file_id, caption="🎬 گیف")
             await update.message.reply_text("✅")
             logger.info(f"✅ GIF sent to {partner_id}")
             
+        # ============ فایل = ارسال مجدد ============
+        elif update.message.document:
+            await context.bot.send_document(partner_id, update.message.document.file_id, caption="📄 فایل")
+            await update.message.reply_text("✅")
+            logger.info(f"✅ Document sent to {partner_id}")
+            
+        # ============ ویدیو = ارسال مجدد ============
         elif update.message.video:
             await context.bot.send_video(partner_id, update.message.video.file_id, caption="🎥 ویدیو")
             await update.message.reply_text("✅")
             logger.info(f"✅ Video sent to {partner_id}")
             
+        # ============ ویس = ارسال مجدد ============
         elif update.message.voice:
             await context.bot.send_voice(partner_id, update.message.voice.file_id)
             await update.message.reply_text("✅")
             logger.info(f"✅ Voice sent to {partner_id}")
             
+        # ============ آهنگ = ارسال مجدد ============
         elif update.message.audio:
             await context.bot.send_audio(partner_id, update.message.audio.file_id)
             await update.message.reply_text("✅")
             logger.info(f"✅ Audio sent to {partner_id}")
-            
-        elif update.message.document:
-            await context.bot.send_document(partner_id, update.message.document.file_id, caption="📄 فایل")
-            await update.message.reply_text("✅")
-            logger.info(f"✅ Document sent to {partner_id}")
             
         else:
             await update.message.reply_text("❌ این نوع پیام پشتیبانی نمی‌شه!")
@@ -1089,7 +1104,6 @@ async def handle_chat_message(update: Update, context: ContextTypes.DEFAULT_TYPE
     except Exception as e:
         logger.error(f"❌ Error sending to {partner_id}: {e}")
         await update.message.reply_text(f"❌ ارسال ناموفق!")
-
 async def request_photo(update: Update, context: ContextTypes.DEFAULT_TYPE):
     query = update.callback_query
     await query.answer()
