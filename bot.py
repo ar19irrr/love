@@ -3,6 +3,7 @@ import logging
 import sqlite3
 import json
 import traceback
+import asyncio
 import threading
 from datetime import datetime, timedelta
 from typing import Optional, List, Dict, Any
@@ -1629,11 +1630,16 @@ async def help_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
         reply_markup=main_menu_keyboard()
     )
 
-# ============ تابع اصلی ربات ============
+# ============ تابع اصلی ربات با event loop درست ============
 def run_bot():
+    """اجرای ربات با event loop جدید"""
     try:
         logger.info("🚀 Starting Telegram bot...")
         init_db()
+        
+        # ایجاد event loop جدید برای این ترد
+        loop = asyncio.new_event_loop()
+        asyncio.set_event_loop(loop)
         
         application = Application.builder().token(TOKEN).build()
         
@@ -1700,7 +1706,9 @@ def run_bot():
         )
         
         logger.info("✅ Telegram bot started successfully!")
-        application.run_polling(allowed_updates=Update.ALL_TYPES)
+        
+        # اجرای ربات با event loop جدید
+        loop.run_until_complete(application.run_polling(allowed_updates=Update.ALL_TYPES))
         
     except Exception as e:
         logger.error(f"❌ Bot error: {e}")
