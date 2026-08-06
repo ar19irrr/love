@@ -309,7 +309,8 @@ def get_interests_keyboard(selected=None):
                 row.append(InlineKeyboardButton(f"⬜ {item}", callback_data=f"interest_{item}"))
         keyboard.append(row)
     
-    keyboard.append([InlineKeyboardButton("✅ تموم شد", callback_data="interests_done")])
+    # این دکمه رو عوض کن
+    keyboard.append([InlineKeyboardButton("✅ تموم شد", callback_data="interest_done")])
     return InlineKeyboardMarkup(keyboard)
 
 # ============ مراحل ثبت‌نام ============
