@@ -268,20 +268,20 @@ def get_chat_info(chat_id: int) -> Optional[Dict]:
     return None
 
 def get_user_photo(user_id: int) -> Optional[str]:
-    """دریافت عکس کاربر - اول عکس آپلود شده، بعد عکس پروفایل تلگرام"""
     user = get_user_dict(user_id)
     if not user:
         return None
-    
-    # اگر کاربر انتخاب کرده که عکسی ارسال نشه
     if user.get('no_photo', 0) == 1:
         return None
-    
-    # اول عکس آپلود شده
     if user.get('photo_file_id'):
         return user['photo_file_id']
-    
     return None
+
+def save_message(chat_id: int, sender_id: int, message_text: str, message_type: str = 'text', file_id: str = None):
+    db.execute("""
+        INSERT INTO messages (chat_id, sender_id, message_text, message_type, file_id, timestamp, is_read)
+        VALUES (?, ?, ?, ?, ?, ?, 0)
+    """, (chat_id, sender_id, message_text, message_type, file_id, datetime.now()))
 
 # ============ کیبوردها ============
 def main_menu_keyboard(is_admin: bool = False):
@@ -302,7 +302,6 @@ def main_menu_keyboard(is_admin: bool = False):
     return InlineKeyboardMarkup(keyboard)
 
 def chat_keyboard(other_user: int, chat_id: int):
-    """کیبورد داخل چت با مشخصات طرف مقابل"""
     other = get_user_dict(other_user)
     gender = other['gender'] if other else 'نامشخص'
     age = other['age'] if other and other['privacy_age'] else '??'
@@ -634,7 +633,7 @@ async def handle_photo_upload(update: Update, context: ContextTypes.DEFAULT_TYPE
     if update.message.photo:
         photo_file = update.message.photo[-1]
         context.user_data['photo'] = photo_file.file_id
-        context.user_data['no_photo'] = 0  # عکس داره
+        context.user_data['no_photo'] = 0
         await update.message.reply_text(
             "✅ عکس شما با موفقیت ذخیره شد!\n\n"
             "برای ادامه دکمه ✅ ادامه رو بزن:",
@@ -653,11 +652,10 @@ async def handle_photo_upload(update: Update, context: ContextTypes.DEFAULT_TYPE
         return PHOTO
 
 async def skip_photo(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    """استفاده از عکس پروفایل تلگرام"""
     query = update.callback_query
     await query.answer()
     context.user_data['photo'] = None
-    context.user_data['no_photo'] = 0  # عکس تلگرام استفاده میشه
+    context.user_data['no_photo'] = 0
     
     await query.edit_message_text(
         "✅ از عکس پروفایل تلگرامت استفاده میشه.\n\n"
@@ -668,11 +666,10 @@ async def skip_photo(update: Update, context: ContextTypes.DEFAULT_TYPE):
     return PRIVACY
 
 async def no_photo(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    """بدون عکس - هیچ عکسی ارسال نشه"""
     query = update.callback_query
     await query.answer()
     context.user_data['photo'] = None
-    context.user_data['no_photo'] = 1  # هیچ عکسی ارسال نشه
+    context.user_data['no_photo'] = 1
     
     await query.edit_message_text(
         "✅ تنظیم شد: **هیچ عکسی** برای کسی ارسال نمیشه.\n\n"
@@ -734,13 +731,10 @@ async def privacy_selection(update: Update, context: ContextTypes.DEFAULT_TYPE):
 async def finish_registration(update: Update, context: ContextTypes.DEFAULT_TYPE):
     user_id = update.effective_user.id
     
-    # اگر کاربر "بدون عکس" رو انتخاب کرده
     if context.user_data.get('no_photo', 0) == 1:
         photo_file_id = None
-    # اگر عکس آپلود کرده
     elif context.user_data.get('photo'):
         photo_file_id = context.user_data['photo']
-    # استفاده از عکس تلگرام
     else:
         try:
             user_photos = await context.bot.get_user_profile_photos(user_id, limit=1)
@@ -929,11 +923,9 @@ async def candidate_action(update: Update, context: ContextTypes.DEFAULT_TYPE):
                 db.execute("INSERT INTO requests (from_user, to_user, created_at, expires_at) VALUES (?, ?, ?, ?)", 
                           (user_id, target_id, datetime.now(), datetime.now() + timedelta(days=3)))
                 
-                # ارسال پیام به طرف مقابل با مشاهده عکس
                 try:
                     target_user = get_user_dict(target_id)
                     if target_user:
-                        # دریافت عکس کاربر
                         user_photo = get_user_photo(user_id)
                         
                         message_text = (
@@ -941,7 +933,6 @@ async def candidate_action(update: Update, context: ContextTypes.DEFAULT_TYPE):
                             f"👤 {target_user['gender']} {target_user['age']} ساله"
                         )
                         
-                        # ارسال عکس اگه وجود داره
                         if user_photo:
                             try:
                                 await context.bot.send_photo(
@@ -956,7 +947,6 @@ async def candidate_action(update: Update, context: ContextTypes.DEFAULT_TYPE):
                                     ])
                                 )
                             except:
-                                # اگر عکس ارسال نشد، پیام متنی بفرست
                                 await context.bot.send_message(
                                     target_id,
                                     message_text + "\n\n(عکس قابل ارسال نبود)",
@@ -968,7 +958,6 @@ async def candidate_action(update: Update, context: ContextTypes.DEFAULT_TYPE):
                                     ])
                                 )
                         else:
-                            # بدون عکس
                             await context.bot.send_message(
                                 target_id,
                                 message_text + "\n\n(بدون عکس)",
@@ -1051,7 +1040,6 @@ async def view_requester(update: Update, context: ContextTypes.DEFAULT_TYPE):
         [InlineKeyboardButton("🔙 برگشت", callback_data="back_to_menu")]
     ]
     
-    # ارسال عکس اگه وجود داره
     user_photo = get_user_photo(requester_id)
     if user_photo:
         try:
@@ -1102,7 +1090,6 @@ async def handle_request(update: Update, context: ContextTypes.DEFAULT_TYPE):
             
             chat_id = db.execute("SELECT last_insert_rowid()").fetchone()[0]
             
-            # قوانین چت
             chat_rules = (
                 "📋 **قوانین چت در بات هم‌نوا**\n\n"
                 "🔒 **حریم خصوصی:**\n"
@@ -1156,7 +1143,6 @@ async def handle_request(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
 # ============ مدیریت چت ============
 async def chat_info(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    """نمایش اطلاعات طرف مقابل در چت"""
     query = update.callback_query
     await query.answer()
     
@@ -1193,7 +1179,6 @@ async def chat_info(update: Update, context: ContextTypes.DEFAULT_TYPE):
     if other['description']:
         message += f"\n\n📝 {other['description']}"
     
-    # ارسال عکس اگه وجود داره
     user_photo = get_user_photo(other_user)
     if user_photo:
         try:
@@ -1220,7 +1205,6 @@ async def chat_info(update: Update, context: ContextTypes.DEFAULT_TYPE):
     )
 
 async def back_chat(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    """برگشت به چت از صفحه اطلاعات"""
     query = update.callback_query
     await query.answer()
     
@@ -1365,6 +1349,7 @@ async def switch_chat(update: Update, context: ContextTypes.DEFAULT_TYPE):
         reply_markup=chat_keyboard(other_user, chat_id)
     )
 
+# ============ هندلر اصلی پیام‌های چت ============
 async def handle_chat_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
     """هندلر اصلی پیام‌های چت"""
     if not update.message:
@@ -1422,45 +1407,54 @@ async def handle_chat_message(update: Update, context: ContextTypes.DEFAULT_TYPE
     
     db.execute("UPDATE chats SET last_message_at=? WHERE id=?", (datetime.now(), chat_id))
     
-    # دریافت اطلاعات فرستنده برای نمایش به گیرنده
     sender = get_user_dict(sender_id)
     sender_info = f"{sender['gender']} {sender['age']} ساله" if sender else "کاربر"
     
     try:
         if update.message.photo:
             caption = update.message.caption if update.message.caption else None
+            # ذخیره پیام در دیتابیس
+            save_message(chat_id, sender_id, caption or "عکس", 'photo', update.message.photo[-1].file_id)
             await context.bot.send_photo(
                 chat_id=partner_id, 
                 photo=update.message.photo[-1].file_id, 
-                caption=caption
+                caption=f"📩 پیام از {sender_info}:\n\n{caption}" if caption else f"📩 عکس از {sender_info}"
             )
             await update.message.reply_text("✅", reply_markup=chat_keyboard(partner_id, chat_id))
         elif update.message.text:
+            # ذخیره پیام در دیتابیس
+            save_message(chat_id, sender_id, update.message.text, 'text')
             await context.bot.send_message(
                 chat_id=partner_id, 
                 text=f"📩 پیام از {sender_info}:\n\n{update.message.text}"
             )
             await update.message.reply_text("✅", reply_markup=chat_keyboard(partner_id, chat_id))
         elif update.message.sticker:
+            save_message(chat_id, sender_id, "استیکر", 'sticker', update.message.sticker.file_id)
             await context.bot.send_sticker(partner_id, update.message.sticker.file_id)
             await update.message.reply_text("✅", reply_markup=chat_keyboard(partner_id, chat_id))
         elif update.message.animation:
             caption = update.message.caption if update.message.caption else "🎬 گیف"
-            await context.bot.send_animation(partner_id, update.message.animation.file_id, caption=caption)
+            save_message(chat_id, sender_id, caption, 'animation', update.message.animation.file_id)
+            await context.bot.send_animation(partner_id, update.message.animation.file_id, caption=f"📩 از {sender_info}: {caption}")
             await update.message.reply_text("✅", reply_markup=chat_keyboard(partner_id, chat_id))
         elif update.message.video:
             caption = update.message.caption if update.message.caption else "🎥 ویدیو"
-            await context.bot.send_video(partner_id, update.message.video.file_id, caption=caption)
+            save_message(chat_id, sender_id, caption, 'video', update.message.video.file_id)
+            await context.bot.send_video(partner_id, update.message.video.file_id, caption=f"📩 از {sender_info}: {caption}")
             await update.message.reply_text("✅", reply_markup=chat_keyboard(partner_id, chat_id))
         elif update.message.voice:
+            save_message(chat_id, sender_id, "ویس", 'voice', update.message.voice.file_id)
             await context.bot.send_voice(partner_id, update.message.voice.file_id)
             await update.message.reply_text("✅", reply_markup=chat_keyboard(partner_id, chat_id))
         elif update.message.audio:
+            save_message(chat_id, sender_id, "آهنگ", 'audio', update.message.audio.file_id)
             await context.bot.send_audio(partner_id, update.message.audio.file_id)
             await update.message.reply_text("✅", reply_markup=chat_keyboard(partner_id, chat_id))
         elif update.message.document:
             caption = update.message.caption if update.message.caption else "📄 فایل"
-            await context.bot.send_document(partner_id, update.message.document.file_id, caption=caption)
+            save_message(chat_id, sender_id, caption, 'document', update.message.document.file_id)
+            await context.bot.send_document(partner_id, update.message.document.file_id, caption=f"📩 از {sender_info}: {caption}")
             await update.message.reply_text("✅", reply_markup=chat_keyboard(partner_id, chat_id))
         else:
             await update.message.reply_text("❌ این نوع پیام پشتیبانی نمی‌شه!", reply_markup=chat_keyboard(partner_id, chat_id))
@@ -1584,7 +1578,7 @@ async def unblock_user(update: Update, context: ContextTypes.DEFAULT_TYPE):
         logger.error(f"Error in unblock_user: {e}")
         await query.edit_message_text("❌ خطا!", reply_markup=main_menu_keyboard())
 
-# ============ گزارش تخلف با ارسال چت به ادمین ============
+# ============ گزارش تخلف ============
 async def report_user(update: Update, context: ContextTypes.DEFAULT_TYPE):
     query = update.callback_query
     await query.answer()
@@ -1613,7 +1607,6 @@ async def report_user(update: Update, context: ContextTypes.DEFAULT_TYPE):
     await query.edit_message_text("⚠️ دلیل گزارش:", reply_markup=InlineKeyboardMarkup(keyboard))
 
 async def report_reason(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    """ثبت دلیل گزارش با ارسال تاریخچه چت به ادمین"""
     query = update.callback_query
     await query.answer()
     
@@ -1630,7 +1623,6 @@ async def report_reason(update: Update, context: ContextTypes.DEFAULT_TYPE):
     current_user = update.effective_user.id
     
     try:
-        # ثبت گزارش در دیتابیس با chat_id
         db.execute("""
             INSERT INTO reports (reporter_id, reported_id, reason, created_at, status, chat_id)
             VALUES (?, ?, ?, ?, 'pending', ?)
@@ -1643,11 +1635,10 @@ async def report_reason(update: Update, context: ContextTypes.DEFAULT_TYPE):
             "i": "محتوای نامناسب"
         }.get(reason, "نامشخص")
         
-        # دریافت اطلاعات کاربران
         reporter = get_user_dict(current_user)
         reported = get_user_dict(user_id)
         
-        # دریافت تاریخچه چت (آخرین ۱۰ پیام)
+        # دریافت تاریخچه چت
         chat_history = ""
         if chat_id:
             messages = db.fetchall(
@@ -1664,9 +1655,8 @@ async def report_reason(update: Update, context: ContextTypes.DEFAULT_TYPE):
             else:
                 chat_history = "\n\n📝 **تاریخچه چت:** خالی (پیامی یافت نشد)"
         else:
-            chat_history = "\n\n📝 **تاریخچه چت:** موجود نیست (چت شناسایی نشد)"
+            chat_history = "\n\n📝 **تاریخچه چت:** موجود نیست"
         
-        # ارسال گزارش کامل به ادمین
         if ADMIN_ID:
             try:
                 admin_msg = (
@@ -1701,12 +1691,11 @@ async def report_reason(update: Update, context: ContextTypes.DEFAULT_TYPE):
                     ])
                 )
                 
-                logger.info(f"✅ Report sent to admin: reporter={current_user}, reported={user_id}, reason={reason_text}")
+                logger.info(f"✅ Report sent to admin: reporter={current_user}, reported={user_id}")
                 
             except Exception as e:
                 logger.error(f"Error sending report to admin: {e}")
                 try:
-                    # اگر پیام طولانی بود، خلاصه بفرست
                     await context.bot.send_message(
                         ADMIN_ID,
                         f"⚠️ گزارش جدید: {current_user} -> {user_id} | {reason_text}",
@@ -1718,7 +1707,6 @@ async def report_reason(update: Update, context: ContextTypes.DEFAULT_TYPE):
                 except:
                     pass
         
-        # پاسخ به کاربر
         reply_markup = chat_keyboard(user_id, chat_id) if chat_id else main_menu_keyboard()
         
         await query.edit_message_text(
@@ -1740,7 +1728,6 @@ async def report_reason(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
 # ============ پشتیبانی ============
 async def support(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    """ارسال پیام به پشتیبانی"""
     query = update.callback_query
     await query.answer()
     
@@ -1763,7 +1750,6 @@ async def support(update: Update, context: ContextTypes.DEFAULT_TYPE):
     context.user_data['support_mode'] = True
 
 async def support_message_input(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    """دریافت پیام پشتیبانی از کاربر"""
     if not context.user_data.get('support_mode'):
         return
     
@@ -1774,13 +1760,11 @@ async def support_message_input(update: Update, context: ContextTypes.DEFAULT_TY
         await update.message.reply_text("❌ لطفاً پیامت رو بنویس!")
         return
     
-    # ذخیره در دیتابیس
     db.execute("""
         INSERT INTO support_messages (user_id, message, created_at, status)
         VALUES (?, ?, ?, 'pending')
     """, (user_id, message_text, datetime.now()))
     
-    # ارسال به ادمین
     if ADMIN_ID:
         try:
             user = get_user_dict(user_id)
@@ -1815,7 +1799,6 @@ async def support_message_input(update: Update, context: ContextTypes.DEFAULT_TY
 
 # ============ مدیریت پشتیبانی توسط ادمین ============
 async def admin_support(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    """مشاهده پیام‌های پشتیبانی توسط ادمین"""
     query = update.callback_query
     await query.answer()
     
@@ -1859,7 +1842,6 @@ async def admin_support(update: Update, context: ContextTypes.DEFAULT_TYPE):
     )
 
 async def admin_reply(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    """ادمین به کاربر پاسخ میده - بدون نیاز به چت"""
     query = update.callback_query
     await query.answer()
     
@@ -1873,7 +1855,6 @@ async def admin_reply(update: Update, context: ContextTypes.DEFAULT_TYPE):
         await query.edit_message_text("❌ خطا!", reply_markup=admin_panel_keyboard())
         return
     
-    # ذخیره آیدی کاربر برای پاسخ
     context.user_data['admin_reply_to'] = user_id
     
     await query.edit_message_text(
@@ -1886,10 +1867,8 @@ async def admin_reply(update: Update, context: ContextTypes.DEFAULT_TYPE):
             [InlineKeyboardButton("🔙 برگشت", callback_data="admin_support")]
         ])
     )
-    context.user_data['admin_reply_to'] = user_id
 
 async def admin_send_reply(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    """ارسال پاسخ ادمین به کاربر - بدون نیاز به چت"""
     if update.effective_user.id != ADMIN_ID:
         return
     
@@ -1908,7 +1887,6 @@ async def admin_send_reply(update: Update, context: ContextTypes.DEFAULT_TYPE):
         return
     
     try:
-        # ارسال مستقیم به کاربر
         await context.bot.send_message(
             user_id,
             f"📞 **پاسخ از پشتیبانی**\n\n{reply_text}\n\n"
@@ -1917,7 +1895,6 @@ async def admin_send_reply(update: Update, context: ContextTypes.DEFAULT_TYPE):
             reply_markup=main_menu_keyboard()
         )
         
-        # بستن پیام‌های پشتیبانی این کاربر
         db.execute("UPDATE support_messages SET status='replied' WHERE user_id=? AND status='pending'", (user_id,))
         
         await update.message.reply_text(
@@ -1938,7 +1915,6 @@ async def admin_send_reply(update: Update, context: ContextTypes.DEFAULT_TYPE):
         context.user_data.pop('admin_reply_to', None)
 
 async def admin_close_support(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    """بستن پیام پشتیبانی توسط ادمین"""
     query = update.callback_query
     await query.answer()
     
@@ -2049,7 +2025,6 @@ async def request_photo(update: Update, context: ContextTypes.DEFAULT_TYPE):
         await query.edit_message_text("❌ کاربر مسدود شده!", reply_markup=main_menu_keyboard())
         return
     
-    # دریافت عکس کاربر
     user_photo = get_user_photo(target_id)
     
     if user_photo:
