@@ -1366,27 +1366,38 @@ async def switch_chat(update: Update, context: ContextTypes.DEFAULT_TYPE):
     )
 
 async def handle_chat_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """هندلر اصلی پیام‌های چت"""
     if not update.message:
         return
     
     user_id = update.effective_user.id
     user = get_user(user_id)
     
+    # ============ اول: بررسی حالت پشتیبانی ============
+    if context.user_data.get('support_mode'):
+        await support_message_input(update, context)
+        return
+    
+    # ============ دوم: بررسی بلاک توسط ادمین ============
     if is_admin_blocked(user_id):
         await update.message.reply_text("🚫 شما مسدود شده‌اید!", reply_markup=main_menu_keyboard())
         return
     
+    # ============ سوم: بررسی ثبت‌نام ============
     if user and not user['is_setup_complete']:
         return
     
+    # ============ چهارم: بررسی حالت ویرایش ============
     if 'editing_field' in context.user_data:
         return
     
+    # ============ پنجم: بررسی چت فعال ============
     if 'active_chat' not in context.user_data:
         if user and user['is_setup_complete']:
             await update.message.reply_text("❌ در چتی نیستی!", reply_markup=main_menu_keyboard())
         return
     
+    # ============ ششم: ادامه کد چت ============
     chat_id = context.user_data['active_chat']
     sender_id = user_id
     
@@ -1425,7 +1436,6 @@ async def handle_chat_message(update: Update, context: ContextTypes.DEFAULT_TYPE
             )
             await update.message.reply_text("✅", reply_markup=chat_keyboard(partner_id, chat_id))
         elif update.message.text:
-            # ارسال پیام با مشخصات فرستنده
             await context.bot.send_message(
                 chat_id=partner_id, 
                 text=f"📩 پیام از {sender_info}:\n\n{update.message.text}"
@@ -1434,8 +1444,26 @@ async def handle_chat_message(update: Update, context: ContextTypes.DEFAULT_TYPE
         elif update.message.sticker:
             await context.bot.send_sticker(partner_id, update.message.sticker.file_id)
             await update.message.reply_text("✅", reply_markup=chat_keyboard(partner_id, chat_id))
+        elif update.message.animation:
+            caption = update.message.caption if update.message.caption else "🎬 گیف"
+            await context.bot.send_animation(partner_id, update.message.animation.file_id, caption=caption)
+            await update.message.reply_text("✅", reply_markup=chat_keyboard(partner_id, chat_id))
+        elif update.message.video:
+            caption = update.message.caption if update.message.caption else "🎥 ویدیو"
+            await context.bot.send_video(partner_id, update.message.video.file_id, caption=caption)
+            await update.message.reply_text("✅", reply_markup=chat_keyboard(partner_id, chat_id))
+        elif update.message.voice:
+            await context.bot.send_voice(partner_id, update.message.voice.file_id)
+            await update.message.reply_text("✅", reply_markup=chat_keyboard(partner_id, chat_id))
+        elif update.message.audio:
+            await context.bot.send_audio(partner_id, update.message.audio.file_id)
+            await update.message.reply_text("✅", reply_markup=chat_keyboard(partner_id, chat_id))
+        elif update.message.document:
+            caption = update.message.caption if update.message.caption else "📄 فایل"
+            await context.bot.send_document(partner_id, update.message.document.file_id, caption=caption)
+            await update.message.reply_text("✅", reply_markup=chat_keyboard(partner_id, chat_id))
         else:
-            await update.message.reply_text("❌ پشتیبانی نمی‌شه!", reply_markup=chat_keyboard(partner_id, chat_id))
+            await update.message.reply_text("❌ این نوع پیام پشتیبانی نمی‌شه!", reply_markup=chat_keyboard(partner_id, chat_id))
     except Exception as e:
         logger.error(f"Error sending message: {e}")
         await update.message.reply_text("❌ ارسال ناموفق!", reply_markup=chat_keyboard(partner_id, chat_id))
