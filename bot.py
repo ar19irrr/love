@@ -61,6 +61,7 @@ class Database:
         
         cursor.execute('''CREATE TABLE IF NOT EXISTS users (
             user_id INTEGER PRIMARY KEY,
+            display_name TEXT,
             gender TEXT,
             age INTEGER,
             purpose TEXT,
@@ -283,6 +284,12 @@ def save_message(chat_id: int, sender_id: int, message_text: str, message_type: 
         VALUES (?, ?, ?, ?, ?, ?, 0)
     """, (chat_id, sender_id, message_text, message_type, file_id, datetime.now()))
 
+def get_user_display_name(user_id: int) -> str:
+    user = get_user_dict(user_id)
+    if user and user.get('display_name'):
+        return user['display_name']
+    return f"کاربر {user_id}"
+
 # ============ کیبوردها ============
 def main_menu_keyboard(is_admin: bool = False):
     keyboard = [
@@ -303,11 +310,10 @@ def main_menu_keyboard(is_admin: bool = False):
 
 def chat_keyboard(other_user: int, chat_id: int):
     other = get_user_dict(other_user)
-    gender = other['gender'] if other else 'نامشخص'
-    age = other['age'] if other and other['privacy_age'] else '??'
+    display_name = other.get('display_name', f"کاربر {other_user}") if other else 'نامشخص'
     
     return InlineKeyboardMarkup([
-        [InlineKeyboardButton(f"👤 {gender} {age}ساله", callback_data=f"chat_info_{chat_id}")],
+        [InlineKeyboardButton(f"👤 {display_name}", callback_data=f"chat_info_{chat_id}")],
         [InlineKeyboardButton("📸 درخواست عکس", callback_data=f"photo_{other_user}")],
         [InlineKeyboardButton("🚫 بلاک", callback_data=f"bl_{other_user}")],
         [InlineKeyboardButton("⚠️ گزارش", callback_data=f"rp_{other_user}")],
@@ -358,6 +364,8 @@ async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
     user_id = update.effective_user.id
     user = get_user(user_id)
     
+    display_name = update.effective_user.full_name or update.effective_user.username or str(user_id)
+    
     if user and user['is_banned']:
         await update.message.reply_text("🚫 شما مسدود شده‌اید!")
         return
@@ -371,6 +379,7 @@ async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
         return ConversationHandler.END
     
     context.user_data.clear()
+    context.user_data['display_name'] = display_name
     
     await update.message.reply_text(
         "🌟 **به بات هم‌نوا خوش اومدی!** 🌟\n\n"
@@ -745,8 +754,11 @@ async def finish_registration(update: Update, context: ContextTypes.DEFAULT_TYPE
         except:
             photo_file_id = None
     
+    display_name = context.user_data.get('display_name', f"کاربر {user_id}")
+    
     user_data = {
         'user_id': user_id,
+        'display_name': display_name,
         'gender': context.user_data['gender'],
         'age': context.user_data['age'],
         'purpose': context.user_data['purpose'],
@@ -877,7 +889,10 @@ async def show_candidate(update: Update, context: ContextTypes.DEFAULT_TYPE):
     candidate = candidates[index]
     user_dict = dict(candidate)
     
-    message = f"👤 {index+1}/{len(candidates)}\n\n"
+    display_name = user_dict.get('display_name', f"کاربر {user_dict['user_id']}")
+    
+    message = f"👤 {display_name}\n"
+    message += f"📌 {index+1}/{len(candidates)}\n\n"
     message += f"سن: {user_dict['age'] if user_dict['privacy_age'] else '❌'}\n"
     message += f"شهر: {user_dict['city'] if user_dict['privacy_city'] else '❌'}\n"
     message += f"هدف: {user_dict['purpose']}\n"
@@ -927,9 +942,10 @@ async def candidate_action(update: Update, context: ContextTypes.DEFAULT_TYPE):
                     target_user = get_user_dict(target_id)
                     if target_user:
                         user_photo = get_user_photo(user_id)
+                        sender_name = get_user_display_name(user_id)
                         
                         message_text = (
-                            f"📩 **یه نفر به شما علاقه داره!**\n\n"
+                            f"📩 **{sender_name} به شما علاقه داره!**\n\n"
                             f"👤 {target_user['gender']} {target_user['age']} ساله"
                         )
                         
@@ -960,7 +976,7 @@ async def candidate_action(update: Update, context: ContextTypes.DEFAULT_TYPE):
                         else:
                             await context.bot.send_message(
                                 target_id,
-                                message_text + "\n\n(بدون عکس)",
+                                message_text,
                                 parse_mode='Markdown',
                                 reply_markup=InlineKeyboardMarkup([
                                     [InlineKeyboardButton("👀 مشاهده پروفایل", callback_data=f"view_{user_id}")],
@@ -1020,7 +1036,9 @@ async def view_requester(update: Update, context: ContextTypes.DEFAULT_TYPE):
         await query.edit_message_text("❌ کاربر پیدا نشد!", reply_markup=main_menu_keyboard())
         return
     
-    message = f"👤 **اطلاعات کاربر**\n\n"
+    display_name = requester.get('display_name', f"کاربر {requester_id}")
+    
+    message = f"👤 **{display_name}**\n\n"
     message += f"جنسیت: {requester['gender']}\n"
     message += f"سن: {requester['age'] if requester['privacy_age'] else '❌'}\n"
     message += f"شهر: {requester['city'] if requester['privacy_city'] else '❌'}\n"
@@ -1165,7 +1183,9 @@ async def chat_info(update: Update, context: ContextTypes.DEFAULT_TYPE):
         await query.edit_message_text("❌ کاربر پیدا نشد!", reply_markup=main_menu_keyboard())
         return
     
-    message = f"👤 **اطلاعات هم‌چت**\n\n"
+    display_name = other.get('display_name', f"کاربر {other_user}")
+    
+    message = f"👤 **{display_name}**\n\n"
     message += f"جنسیت: {other['gender']}\n"
     message += f"سن: {other['age'] if other['privacy_age'] else '❌'}\n"
     message += f"شهر: {other['city'] if other['privacy_city'] else '❌'}\n"
@@ -1306,8 +1326,9 @@ async def show_chats(update: Update, context: ContextTypes.DEFAULT_TYPE):
         other_user = chat['user2'] if chat['user1'] == user_id else chat['user1']
         other = get_user_dict(other_user)
         if other and not is_admin_blocked(other_user):
+            display_name = other.get('display_name', f"کاربر {other_user}")
             last_msg = f" - {chat['last_message_at'][:16]}" if chat['last_message_at'] else ""
-            keyboard.append([InlineKeyboardButton(f"💬 {other['gender']} {other['age']}ساله{last_msg}", callback_data=f"switch_chat_{chat['id']}")])
+            keyboard.append([InlineKeyboardButton(f"💬 {display_name}{last_msg}", callback_data=f"switch_chat_{chat['id']}")])
     
     keyboard.append([InlineKeyboardButton("🔙 برگشت", callback_data="back_to_menu")])
     
@@ -1349,47 +1370,82 @@ async def switch_chat(update: Update, context: ContextTypes.DEFAULT_TYPE):
         reply_markup=chat_keyboard(other_user, chat_id)
     )
 
+async def close_chat(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    query = update.callback_query
+    await query.answer()
+    
+    chat_id = context.user_data.get('active_chat')
+    
+    if chat_id:
+        db.execute("UPDATE chats SET is_active=0 WHERE id=?", (chat_id,))
+        
+        chat = get_chat_info(chat_id)
+        if chat:
+            current_user = update.effective_user.id
+            other_user = chat['user2'] if chat['user1'] == current_user else chat['user1']
+            try:
+                display_name = get_user_display_name(current_user)
+                await context.bot.send_message(
+                    other_user,
+                    f"🔴 **چت توسط {display_name} بسته شد!**\n\n"
+                    "این چت به پایان رسید.",
+                    parse_mode='Markdown',
+                    reply_markup=main_menu_keyboard()
+                )
+            except:
+                pass
+    
+    context.user_data.pop('active_chat', None)
+    context.user_data.pop('chat_partner', None)
+    
+    is_admin = (update.effective_user.id == ADMIN_ID)
+    await query.edit_message_text(
+        "✅ **چت بسته شد!**\n\n"
+        "این چت برای هر دو طرف غیرفعال شد.",
+        parse_mode='Markdown',
+        reply_markup=main_menu_keyboard(is_admin)
+    )
+
 # ============ هندلر اصلی پیام‌های چت ============
 async def handle_chat_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    """هندلر اصلی پیام‌های چت"""
     if not update.message:
         return
     
     user_id = update.effective_user.id
     user = get_user(user_id)
     
-    # ============ اول: بررسی حالت پشتیبانی ============
+    # بررسی حالت پشتیبانی
     if context.user_data.get('support_mode'):
         await support_message_input(update, context)
         return
     
-    # ============ دوم: بررسی بلاک توسط ادمین ============
     if is_admin_blocked(user_id):
         await update.message.reply_text("🚫 شما مسدود شده‌اید!", reply_markup=main_menu_keyboard())
         return
     
-    # ============ سوم: بررسی ثبت‌نام ============
     if user and not user['is_setup_complete']:
         return
     
-    # ============ چهارم: بررسی حالت ویرایش ============
     if 'editing_field' in context.user_data:
         return
     
-    # ============ پنجم: بررسی چت فعال ============
     if 'active_chat' not in context.user_data:
         if user and user['is_setup_complete']:
             await update.message.reply_text("❌ در چتی نیستی!", reply_markup=main_menu_keyboard())
         return
     
-    # ============ ششم: ادامه کد چت ============
     chat_id = context.user_data['active_chat']
     sender_id = user_id
     
     chat = get_chat_info(chat_id)
     
     if not chat or not chat['is_active']:
-        await update.message.reply_text("❌ چت فعال نیست!", reply_markup=main_menu_keyboard())
+        await update.message.reply_text(
+            "❌ **این چت بسته شده است!**\n\n"
+            "چت توسط یکی از طرفین بسته شده.",
+            parse_mode='Markdown',
+            reply_markup=main_menu_keyboard()
+        )
         context.user_data.pop('active_chat', None)
         return
     
@@ -1407,60 +1463,66 @@ async def handle_chat_message(update: Update, context: ContextTypes.DEFAULT_TYPE
     
     db.execute("UPDATE chats SET last_message_at=? WHERE id=?", (datetime.now(), chat_id))
     
-    sender = get_user_dict(sender_id)
-    sender_info = f"{sender['gender']} {sender['age']} ساله" if sender else "کاربر"
+    sender_name = get_user_display_name(sender_id)
     
     try:
         if update.message.photo:
             caption = update.message.caption if update.message.caption else None
-            # ذخیره پیام در دیتابیس
             save_message(chat_id, sender_id, caption or "عکس", 'photo', update.message.photo[-1].file_id)
             await context.bot.send_photo(
                 chat_id=partner_id, 
                 photo=update.message.photo[-1].file_id, 
-                caption=f"📩 پیام از {sender_info}:\n\n{caption}" if caption else f"📩 عکس از {sender_info}"
+                caption=f"📩 پیام از {sender_name}:\n\n{caption}" if caption else f"📩 عکس از {sender_name}"
             )
-            await update.message.reply_text("✅", reply_markup=chat_keyboard(partner_id, chat_id))
+            await update.message.reply_text("✅")
+            
         elif update.message.text:
-            # ذخیره پیام در دیتابیس
             save_message(chat_id, sender_id, update.message.text, 'text')
             await context.bot.send_message(
                 chat_id=partner_id, 
-                text=f"📩 پیام از {sender_info}:\n\n{update.message.text}"
+                text=f"📩 پیام از {sender_name}:\n\n{update.message.text}"
             )
-            await update.message.reply_text("✅", reply_markup=chat_keyboard(partner_id, chat_id))
+            await update.message.reply_text("✅")
+            
         elif update.message.sticker:
             save_message(chat_id, sender_id, "استیکر", 'sticker', update.message.sticker.file_id)
             await context.bot.send_sticker(partner_id, update.message.sticker.file_id)
-            await update.message.reply_text("✅", reply_markup=chat_keyboard(partner_id, chat_id))
+            await update.message.reply_text("✅")
+            
         elif update.message.animation:
             caption = update.message.caption if update.message.caption else "🎬 گیف"
             save_message(chat_id, sender_id, caption, 'animation', update.message.animation.file_id)
-            await context.bot.send_animation(partner_id, update.message.animation.file_id, caption=f"📩 از {sender_info}: {caption}")
-            await update.message.reply_text("✅", reply_markup=chat_keyboard(partner_id, chat_id))
+            await context.bot.send_animation(partner_id, update.message.animation.file_id, caption=f"📩 از {sender_name}: {caption}")
+            await update.message.reply_text("✅")
+            
         elif update.message.video:
             caption = update.message.caption if update.message.caption else "🎥 ویدیو"
             save_message(chat_id, sender_id, caption, 'video', update.message.video.file_id)
-            await context.bot.send_video(partner_id, update.message.video.file_id, caption=f"📩 از {sender_info}: {caption}")
-            await update.message.reply_text("✅", reply_markup=chat_keyboard(partner_id, chat_id))
+            await context.bot.send_video(partner_id, update.message.video.file_id, caption=f"📩 از {sender_name}: {caption}")
+            await update.message.reply_text("✅")
+            
         elif update.message.voice:
             save_message(chat_id, sender_id, "ویس", 'voice', update.message.voice.file_id)
             await context.bot.send_voice(partner_id, update.message.voice.file_id)
-            await update.message.reply_text("✅", reply_markup=chat_keyboard(partner_id, chat_id))
+            await update.message.reply_text("✅")
+            
         elif update.message.audio:
             save_message(chat_id, sender_id, "آهنگ", 'audio', update.message.audio.file_id)
             await context.bot.send_audio(partner_id, update.message.audio.file_id)
-            await update.message.reply_text("✅", reply_markup=chat_keyboard(partner_id, chat_id))
+            await update.message.reply_text("✅")
+            
         elif update.message.document:
             caption = update.message.caption if update.message.caption else "📄 فایل"
             save_message(chat_id, sender_id, caption, 'document', update.message.document.file_id)
-            await context.bot.send_document(partner_id, update.message.document.file_id, caption=f"📩 از {sender_info}: {caption}")
-            await update.message.reply_text("✅", reply_markup=chat_keyboard(partner_id, chat_id))
+            await context.bot.send_document(partner_id, update.message.document.file_id, caption=f"📩 از {sender_name}: {caption}")
+            await update.message.reply_text("✅")
+            
         else:
-            await update.message.reply_text("❌ این نوع پیام پشتیبانی نمی‌شه!", reply_markup=chat_keyboard(partner_id, chat_id))
+            await update.message.reply_text("❌ این نوع پیام پشتیبانی نمی‌شه!")
+            
     except Exception as e:
         logger.error(f"Error sending message: {e}")
-        await update.message.reply_text("❌ ارسال ناموفق!", reply_markup=chat_keyboard(partner_id, chat_id))
+        await update.message.reply_text("❌ ارسال ناموفق!")
 
 # ============ بلاک توسط کاربر ============
 async def block_user(update: Update, context: ContextTypes.DEFAULT_TYPE):
@@ -1638,7 +1700,6 @@ async def report_reason(update: Update, context: ContextTypes.DEFAULT_TYPE):
         reporter = get_user_dict(current_user)
         reported = get_user_dict(user_id)
         
-        # دریافت تاریخچه چت
         chat_history = ""
         if chat_id:
             messages = db.fetchall(
@@ -1667,10 +1728,12 @@ async def report_reason(update: Update, context: ContextTypes.DEFAULT_TYPE):
                     f"└─────────────────\n\n"
                     f"👤 **گزارش‌دهنده:**\n"
                     f"   ├ آیدی: `{current_user}`\n"
+                    f"   ├ نام: {reporter.get('display_name', 'نامشخص') if reporter else 'نامشخص'}\n"
                     f"   ├ جنسیت: {reporter['gender'] if reporter else 'نامشخص'}\n"
                     f"   └ سن: {reporter['age'] if reporter else 'نامشخص'}\n\n"
                     f"👤 **گزارش‌شونده:**\n"
                     f"   ├ آیدی: `{user_id}`\n"
+                    f"   ├ نام: {reported.get('display_name', 'نامشخص') if reported else 'نامشخص'}\n"
                     f"   ├ جنسیت: {reported['gender'] if reported else 'نامشخص'}\n"
                     f"   └ سن: {reported['age'] if reported else 'نامشخص'}\n\n"
                     f"📌 **دلیل گزارش:** {reason_text}\n"
@@ -1768,10 +1831,14 @@ async def support_message_input(update: Update, context: ContextTypes.DEFAULT_TY
     if ADMIN_ID:
         try:
             user = get_user_dict(user_id)
+            display_name = user.get('display_name', 'نامشخص') if user else 'نامشخص'
+            
             admin_msg = (
                 f"📞 **پیام پشتیبانی جدید**\n\n"
                 f"👤 **کاربر:** `{user_id}`\n"
-                f"👤 **نام:** {user['gender'] if user else 'نامشخص'} {user['age'] if user else ''} ساله\n"
+                f"👤 **نام:** {display_name}\n"
+                f"👤 **جنسیت:** {user['gender'] if user else 'نامشخص'}\n"
+                f"👤 **سن:** {user['age'] if user else 'نامشخص'}\n"
                 f"📅 **زمان:** {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}\n\n"
                 f"📝 **پیام:**\n{message_text}"
             )
@@ -1823,13 +1890,13 @@ async def admin_support(update: Update, context: ContextTypes.DEFAULT_TYPE):
     
     for msg in messages:
         user = get_user_dict(msg['user_id'])
-        user_name = f"{user['gender'] if user else ''} {user['age'] if user else ''}" if user else 'نامشخص'
+        display_name = user.get('display_name', 'نامشخص') if user else 'نامشخص'
         msg_preview = msg['message'][:40] + '...' if len(msg['message']) > 40 else msg['message']
-        message += f"🆔 {msg['id']} | کاربر {msg['user_id']} ({user_name})\n"
+        message += f"🆔 {msg['id']} | {display_name} ({msg['user_id']})\n"
         message += f"📝 {msg_preview}\n"
         message += f"📅 {msg['created_at'][:16]}\n\n"
         keyboard.append([
-            InlineKeyboardButton(f"💬 پاسخ به {msg['user_id']}", callback_data=f"admin_reply_{msg['user_id']}"),
+            InlineKeyboardButton(f"💬 پاسخ به {display_name}", callback_data=f"admin_reply_{msg['user_id']}"),
             InlineKeyboardButton(f"✅ بسته شد", callback_data=f"admin_close_support_{msg['id']}")
         ])
     
@@ -1857,8 +1924,11 @@ async def admin_reply(update: Update, context: ContextTypes.DEFAULT_TYPE):
     
     context.user_data['admin_reply_to'] = user_id
     
+    user = get_user_dict(user_id)
+    display_name = user.get('display_name', 'کاربر') if user else 'کاربر'
+    
     await query.edit_message_text(
-        f"📞 **پاسخ به کاربر**\n\n"
+        f"📞 **پاسخ به {display_name}**\n\n"
         f"آیدی کاربر: `{user_id}`\n\n"
         "لطفاً پیام پاسخ رو بنویس و ارسال کن.\n"
         "⚠️ پیام شما مستقیماً برای کاربر ارسال میشه.",
@@ -1887,6 +1957,9 @@ async def admin_send_reply(update: Update, context: ContextTypes.DEFAULT_TYPE):
         return
     
     try:
+        user = get_user_dict(user_id)
+        display_name = user.get('display_name', 'کاربر') if user else 'کاربر'
+        
         await context.bot.send_message(
             user_id,
             f"📞 **پاسخ از پشتیبانی**\n\n{reply_text}\n\n"
@@ -1898,7 +1971,7 @@ async def admin_send_reply(update: Update, context: ContextTypes.DEFAULT_TYPE):
         db.execute("UPDATE support_messages SET status='replied' WHERE user_id=? AND status='pending'", (user_id,))
         
         await update.message.reply_text(
-            f"✅ **پاسخ شما به کاربر `{user_id}` ارسال شد!**",
+            f"✅ **پاسخ شما به {display_name} ارسال شد!**",
             reply_markup=admin_panel_keyboard()
         )
         context.user_data.pop('admin_reply_to', None)
@@ -2043,16 +2116,6 @@ async def request_photo(update: Update, context: ContextTypes.DEFAULT_TYPE):
             reply_markup=chat_keyboard(target_id, chat_id)
         )
 
-async def close_chat(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    query = update.callback_query
-    await query.answer()
-    
-    context.user_data.pop('active_chat', None)
-    context.user_data.pop('chat_partner', None)
-    
-    is_admin = (update.effective_user.id == ADMIN_ID)
-    await query.edit_message_text("✅ چت بسته شد!", reply_markup=main_menu_keyboard(is_admin))
-
 async def back_to_candidate(update: Update, context: ContextTypes.DEFAULT_TYPE):
     query = update.callback_query
     await query.answer()
@@ -2086,6 +2149,7 @@ async def edit_profile(update: Update, context: ContextTypes.DEFAULT_TYPE):
         return
     
     info = f"📝 اطلاعات شما:\n\n"
+    info += f"👤 نام: {user.get('display_name', 'نامشخص')}\n"
     info += f"👤 جنسیت: {user['gender']}\n"
     info += f"📅 سن: {user['age']}\n"
     info += f"🎯 هدف: {user['purpose']}\n"
@@ -2104,6 +2168,7 @@ async def edit_profile(update: Update, context: ContextTypes.DEFAULT_TYPE):
     info += f"\nکدوم بخش رو ویرایش کنی؟"
     
     keyboard = [
+        [InlineKeyboardButton("👤 نام", callback_data="edit_name")],
         [InlineKeyboardButton("👤 جنسیت", callback_data="edit_gender"), InlineKeyboardButton("📅 سن", callback_data="edit_age")],
         [InlineKeyboardButton("🎯 هدف", callback_data="edit_purpose"), InlineKeyboardButton("🏙️ شهر", callback_data="edit_city")],
         [InlineKeyboardButton("🎨 علایق", callback_data="edit_interests"), InlineKeyboardButton("💼 وضعیت", callback_data="edit_job")],
@@ -2127,7 +2192,14 @@ async def edit_profile_field(update: Update, context: ContextTypes.DEFAULT_TYPE)
     field = query.data.replace("edit_", "")
     user = get_user_dict(user_id)
     
-    if field == "gender":
+    if field == "name":
+        await query.edit_message_text(
+            f"نام فعلی: {user.get('display_name', 'نامشخص')}\n\n"
+            "نام جدید رو وارد کن:",
+            reply_markup=InlineKeyboardMarkup([[InlineKeyboardButton("🔙 برگشت", callback_data="edit_profile")]])
+        )
+        context.user_data['editing_field'] = 'name'
+    elif field == "gender":
         await query.edit_message_text(
             "جنسیت جدید:",
             reply_markup=InlineKeyboardMarkup([
@@ -2255,7 +2327,14 @@ async def handle_profile_text_input(update: Update, context: ContextTypes.DEFAUL
     
     field = context.user_data.get('editing_field')
     
-    if field == 'age':
+    if field == 'name':
+        display_name = update.message.text
+        if display_name and len(display_name) > 0:
+            save_user(user_id, {'display_name': display_name})
+            await update.message.reply_text("✅ نام به‌روز شد!", reply_markup=main_menu_keyboard())
+        else:
+            await update.message.reply_text("❌ نام معتبر وارد کن!")
+    elif field == 'age':
         try:
             age = int(update.message.text)
             if 10 <= age <= 100:
@@ -2308,7 +2387,8 @@ async def my_requests(update: Update, context: ContextTypes.DEFAULT_TYPE):
     for req in received[:5]:
         from_user = get_user_dict(req['from_user'])
         if from_user and not is_admin_blocked(from_user['user_id']):
-            message += f"👤 {from_user['age'] if from_user['privacy_age'] else '❌'} - {from_user['city'] if from_user['privacy_city'] else '❌'}\n"
+            display_name = from_user.get('display_name', f"کاربر {from_user['user_id']}")
+            message += f"👤 {display_name} - {from_user['age'] if from_user['privacy_age'] else '❌'} سال\n"
             keyboard.append([InlineKeyboardButton("👀 مشاهده", callback_data=f"view_{from_user['user_id']}")])
     
     keyboard.append([InlineKeyboardButton("🔙 برگشت", callback_data="back_to_menu")])
@@ -2475,8 +2555,9 @@ async def admin_unblock_user(update: Update, context: ContextTypes.DEFAULT_TYPE)
     for user_id in blocked:
         user = get_user_dict(user_id)
         if user:
-            message += f"👤 {user_id}\n"
-            keyboard.append([InlineKeyboardButton(f"✅ آنبلاک {user_id}", callback_data=f"admin_unblock_{user_id}")])
+            display_name = user.get('display_name', f"کاربر {user_id}")
+            message += f"👤 {display_name} ({user_id})\n"
+            keyboard.append([InlineKeyboardButton(f"✅ آنبلاک {display_name}", callback_data=f"admin_unblock_{user_id}")])
     
     keyboard.append([InlineKeyboardButton("🔙 برگشت", callback_data="admin_panel")])
     
@@ -2553,10 +2634,14 @@ async def admin_reports(update: Update, context: ContextTypes.DEFAULT_TYPE):
     keyboard = []
     
     for r in reports:
+        reporter = get_user_dict(r['reporter_id'])
+        reported = get_user_dict(r['reported_id'])
+        reporter_name = reporter.get('display_name', r['reporter_id']) if reporter else r['reporter_id']
+        reported_name = reported.get('display_name', r['reported_id']) if reported else r['reported_id']
         reason_text = {"a": "فحاشی", "s": "مزاحمت", "f": "کلاهبرداری", "i": "محتوای نامناسب"}.get(r['reason'], r['reason'])
-        message += f"🆔 {r['id']} - {r['reported_id']} - {reason_text}\n"
+        message += f"🆔 {r['id']} - {reported_name} - {reason_text}\n"
         keyboard.append([
-            InlineKeyboardButton(f"🚫 بلاک", callback_data=f"admin_block_from_report_{r['reported_id']}"),
+            InlineKeyboardButton(f"🚫 بلاک {reported_name}", callback_data=f"admin_block_from_report_{r['reported_id']}"),
             InlineKeyboardButton(f"❌ رد", callback_data=f"admin_reject_report_{r['reported_id']}")
         ])
     
@@ -2663,7 +2748,7 @@ def main():
         application.add_handler(CallbackQueryHandler(back_chat, pattern='^back_chat_'))
         
         # ویرایش
-        application.add_handler(CallbackQueryHandler(edit_profile_field, pattern='^edit_(gender|age|purpose|city|interests|job|description|photo)$'))
+        application.add_handler(CallbackQueryHandler(edit_profile_field, pattern='^edit_(name|gender|age|purpose|city|interests|job|description|photo)$'))
         application.add_handler(CallbackQueryHandler(update_profile_field, pattern='^update_(gender_|purpose_|job_|interest_|interests_done|photo_telegram|photo_none)'))
         application.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, handle_profile_text_input))
         application.add_handler(MessageHandler(filters.PHOTO, handle_profile_text_input))
