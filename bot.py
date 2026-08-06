@@ -1517,15 +1517,21 @@ async def scheduled_cleanup():
         except Exception as e:
             logger.error(f"Error in scheduled cleanup: {e}")
 
-# ============ تابع اصلی ربات ============
-async def run_bot():
-    """اجرای ربات تلگرام"""
+# ============ تابع اصلی ============
+def main():
+    """تابع اصلی برنامه"""
     try:
-        logger.info("🤖 Starting Telegram bot...")
+        logger.info("🚀 Starting bot...")
         
+        # اجرای Flask در ترد جداگانه
+        flask_thread = threading.Thread(target=run_flask, daemon=True)
+        flask_thread.start()
+        logger.info("🌐 Flask server started in background thread")
+        
+        # ساخت اپلیکیشن
         application = Application.builder().token(TOKEN).build()
         
-        # هندلر ثبت‌نام
+        # ============ هندلر ثبت‌نام ============
         conv_handler = ConversationHandler(
             entry_points=[CommandHandler('start', start)],
             states={
@@ -1552,7 +1558,7 @@ async def run_bot():
         )
         application.add_handler(conv_handler)
         
-        # منوهای اصلی
+        # ============ منوهای اصلی ============
         application.add_handler(CallbackQueryHandler(search, pattern='^search$'))
         application.add_handler(CallbackQueryHandler(edit_profile, pattern='^edit_profile$'))
         application.add_handler(CallbackQueryHandler(my_requests, pattern='^my_requests$'))
@@ -1562,63 +1568,66 @@ async def run_bot():
         application.add_handler(CallbackQueryHandler(help_command, pattern='^help$'))
         application.add_handler(CallbackQueryHandler(back_to_menu, pattern='^back_to_menu$'))
         
-        # چت‌ها
+        # ============ چت‌ها ============
         application.add_handler(CallbackQueryHandler(show_chats, pattern='^show_chats$'))
         application.add_handler(CallbackQueryHandler(switch_chat, pattern='^switch_chat_'))
         
-        # ویرایش پروفایل
+        # ============ ویرایش پروفایل ============
         application.add_handler(CallbackQueryHandler(edit_profile_field, pattern='^edit_(gender|age|purpose|city|interests|job|description|photo)$'))
         application.add_handler(CallbackQueryHandler(update_profile_field, pattern='^update_(gender_|purpose_|job_|interest_|interests_done)'))
         application.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, handle_profile_text_input))
         application.add_handler(MessageHandler(filters.PHOTO, handle_profile_text_input))
         
-        # جستجو و درخواست‌ها
+        # ============ جستجو و درخواست‌ها ============
         application.add_handler(CallbackQueryHandler(candidate_action, pattern='^(like|dislike|more)_'))
         application.add_handler(CallbackQueryHandler(show_candidate, pattern='^next_candidate$'))
         application.add_handler(CallbackQueryHandler(back_to_candidate, pattern='^back_'))
         application.add_handler(CallbackQueryHandler(view_requester, pattern='^view_'))
         application.add_handler(CallbackQueryHandler(handle_request, pattern='^(accept|reject)_'))
         
-        # چت
+        # ============ چت ============
         application.add_handler(CallbackQueryHandler(start_chat, pattern='^chat_'))
         application.add_handler(CallbackQueryHandler(request_photo, pattern='^photo_'))
         application.add_handler(CallbackQueryHandler(block_user, pattern='^block_'))
         application.add_handler(CallbackQueryHandler(block_reason, pattern='^block_reason_'))
         application.add_handler(CallbackQueryHandler(close_chat, pattern='^close_chat$'))
         
-        # حریم خصوصی
+        # ============ حریم خصوصی ============
         application.add_handler(CallbackQueryHandler(privacy_toggle, pattern='^privacy_toggle_(age|city|change_visibility)$'))
         
-        # هندلر اصلی پیام‌ها
-        application.add_handler(MessageHandler(filters.ALL & ~filters.COMMAND, handle_chat_message), group=1)
+        # ============ هندلر اصلی پیام‌ها ============
+        application.add_handler(
+            MessageHandler(filters.ALL & ~filters.COMMAND, handle_chat_message),
+            group=1
+        )
         
-        # پاکسازی خودکار
-        asyncio.create_task(scheduled_cleanup())
+        # ============ شروع پاکسازی خودکار ============
+        # ایجاد یک task برای پاکسازی خودکار
+        loop = asyncio.get_event_loop()
+        loop.create_task(scheduled_cleanup())
         
         logger.info("✅ Bot started successfully!")
         
-        # اجرای ربات با polling
-        await application.run_polling(
-            allowed_updates=['message', 'callback_query', 'edited_message', 'channel_post', 'edited_channel_post', 'inline_query', 'chosen_inline_result', 'shipping_query', 'pre_checkout_query'],
+        # ============ اجرا با استفاده از run_polling ============
+        # استفاده از asyncio.run() برای اجرای ربات
+        asyncio.run(application.run_polling(
+            allowed_updates=[
+                'message', 
+                'callback_query', 
+                'edited_message',
+                'channel_post',
+                'edited_channel_post',
+                'inline_query',
+                'chosen_inline_result',
+                'shipping_query',
+                'pre_checkout_query'
+            ],
             drop_pending_updates=True
-        )
+        ))
         
-    except Exception as e:
-        logger.error(f"❌ Bot error: {e}")
-        logger.error(traceback.format_exc())
-
-# ============ نقطه ورود اصلی ============
-if __name__ == '__main__':
-    # اجرای Flask در ترد جداگانه
-    flask_thread = threading.Thread(target=run_flask, daemon=True)
-    flask_thread.start()
-    logger.info("🌐 Flask thread started")
-    
-    # اجرای ربات در event loop اصلی
-    try:
-        asyncio.run(run_bot())
-    except KeyboardInterrupt:
-        logger.info("🛑 Bot stopped by user")
     except Exception as e:
         logger.error(f"❌ Fatal error: {e}")
         logger.error(traceback.format_exc())
+
+if __name__ == '__main__':
+    main()
