@@ -496,7 +496,7 @@ async def interests_selection(update: Update, context: ContextTypes.DEFAULT_TYPE
             )
             # دوباره صفحه علایق رو نشون بده
             await show_interests(update, context)
-            return INTERESTS
+            return INTERESTS  # <--- اینجا مهمه که برگرده
         
         # رفتن به مرحله بعد (وضعیت شغلی)
         await query.edit_message_text(
@@ -511,7 +511,7 @@ async def interests_selection(update: Update, context: ContextTypes.DEFAULT_TYPE
                 [InlineKeyboardButton("🏠 خانه‌دار", callback_data="job_home")]
             ])
         )
-        return JOB_STATUS
+        return JOB_STATUS  # <--- اینجا باید JOB_STATUS برگرده
     
     # حذف "interest_" از ابتدای داده
     interest = query.data.replace("interest_", "")
@@ -528,13 +528,13 @@ async def interests_selection(update: Update, context: ContextTypes.DEFAULT_TYPE
                 reply_markup=None
             )
             await show_interests(update, context)
-            return INTERESTS
+            return INTERESTS  # <--- اینجا مهمه که برگرده
         context.user_data['interests'].append(interest)
         await query.answer(f"✅ {interest} اضافه شد!")
     
     # دوباره صفحه علایق رو نشون بده
     await show_interests(update, context)
-    return INTERESTS
+    return INTERESTS  # <--- اینجا باید INTERESTS برگرده
 
 async def job_status_selection(update: Update, context: ContextTypes.DEFAULT_TYPE):
     query = update.callback_query
