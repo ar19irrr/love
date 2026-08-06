@@ -99,6 +99,8 @@ def init_db():
     c.execute("CREATE INDEX IF NOT EXISTS idx_rejected_time ON rejected(rejected_at)")
     c.execute("CREATE INDEX IF NOT EXISTS idx_messages_chat ON messages(chat_id)")
     c.execute("CREATE INDEX IF NOT EXISTS idx_messages_time ON messages(timestamp)")
+    c.execute("CREATE INDEX IF NOT EXISTS idx_blocks_blocker ON blocks(blocker_id)")
+    c.execute("CREATE INDEX IF NOT EXISTS idx_blocks_blocked ON blocks(blocked_id)")
     
     conn.commit()
     conn.close()
@@ -140,6 +142,17 @@ def save_user(user_id, data):
     
     conn.commit()
     conn.close()
+
+def is_blocked(user_id, target_id):
+    conn = sqlite3.connect('matchbot.db')
+    c = conn.cursor()
+    c.execute("""
+        SELECT * FROM blocks 
+        WHERE (blocker_id=? AND blocked_id=?) OR (blocker_id=? AND blocked_id=?)
+    """, (user_id, target_id, target_id, user_id))
+    result = c.fetchone()
+    conn.close()
+    return result is not None
 
 GENDER, AGE, PURPOSE, CITY, AGE_MIN, AGE_MAX, INTERESTS, JOB_STATUS, DESCRIPTION, PHOTO, PRIVACY = range(11)
 
@@ -602,6 +615,13 @@ async def search(update: Update, context: ContextTypes.DEFAULT_TYPE):
     active_chats2 = [row[0] for row in c.fetchall()]
     active_chats = active_chats1 + active_chats2
     
+    # دریافت لیست کاربران بلاک شده
+    c.execute("SELECT blocked_id FROM blocks WHERE blocker_id=?", (user_id,))
+    blocked_by_me = [row[0] for row in c.fetchall()]
+    c.execute("SELECT blocker_id FROM blocks WHERE blocked_id=?", (user_id,))
+    blocked_me = [row[0] for row in c.fetchall()]
+    blocked_users = blocked_by_me + blocked_me
+    
     query_str = """
         SELECT * FROM users 
         WHERE user_id != ? 
@@ -622,6 +642,9 @@ async def search(update: Update, context: ContextTypes.DEFAULT_TYPE):
     if active_chats:
         query_str += f" AND user_id NOT IN ({','.join(['?']*len(active_chats))})"
         params.extend(active_chats)
+    if blocked_users:
+        query_str += f" AND user_id NOT IN ({','.join(['?']*len(blocked_users))})"
+        params.extend(blocked_users)
     
     c.execute(query_str, params)
     candidates = c.fetchall()
@@ -1009,17 +1032,14 @@ async def start_chat(update: Update, context: ContextTypes.DEFAULT_TYPE):
     except:
         pass
 
-# ============ هندلر اصلی چت با فوروارد - نسخه بهبود یافته ============
+# ============ هندلر اصلی چت - بدون فوروارد ============
 async def handle_chat_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    # لاگ کامل برای دیباگ
     logger.info(f"📩 handle_chat_message CALLED! user={update.effective_user.id}")
     
-    # بررسی اینکه آیا پیام وجود داره
     if not update.message:
-        logger.warning(f"❌ No message in update for user {update.effective_user.id}")
+        logger.warning(f"❌ No message in update")
         return
     
-    logger.info(f"📩 Message type: {type(update.message).__name__}")
     logger.info(f"📩 Has text: {bool(update.message.text)}")
     logger.info(f"📩 Has photo: {bool(update.message.photo)}")
     logger.info(f"📩 Has sticker: {bool(update.message.sticker)}")
@@ -1029,7 +1049,6 @@ async def handle_chat_message(update: Update, context: ContextTypes.DEFAULT_TYPE
     logger.info(f"📩 Has audio: {bool(update.message.audio)}")
     logger.info(f"📩 Has document: {bool(update.message.document)}")
     
-    # بررسی اینکه کاربر در چت فعال هست
     if 'active_chat' not in context.user_data:
         logger.warning(f"❌ No active chat for user {update.effective_user.id}")
         await update.message.reply_text("❌ شما در هیچ چتی نیستی!", reply_markup=main_menu_keyboard())
@@ -1038,7 +1057,6 @@ async def handle_chat_message(update: Update, context: ContextTypes.DEFAULT_TYPE
     chat_id = context.user_data['active_chat']
     sender_id = update.effective_user.id
     
-    # بررسی اعتبار چت
     conn = sqlite3.connect('matchbot.db')
     c = conn.cursor()
     c.execute("SELECT user1, user2, is_active, blocked_by FROM chats WHERE id=?", (chat_id,))
@@ -1059,27 +1077,27 @@ async def handle_chat_message(update: Update, context: ContextTypes.DEFAULT_TYPE
     logger.info(f"🔍 sender={sender_id}, partner={partner_id}")
     
     try:
-        # ============ متن ============
-        if update.message.text:
-            logger.info(f"📝 Text message from {sender_id}: {update.message.text[:50]}")
-            await context.bot.forward_message(
-                chat_id=partner_id,
-                from_chat_id=sender_id,
-                message_id=update.message.message_id
-            )
-            await update.message.reply_text("✅")
-            logger.info(f"✅ Text forwarded to {partner_id}")
-            
         # ============ عکس ============
-        elif update.message.photo:
+        if update.message.photo:
             logger.info(f"📸 Photo from {sender_id}")
-            await context.bot.forward_message(
+            caption = update.message.caption if update.message.caption else None
+            await context.bot.send_photo(
                 chat_id=partner_id,
-                from_chat_id=sender_id,
-                message_id=update.message.message_id
+                photo=update.message.photo[-1].file_id,
+                caption=caption
             )
             await update.message.reply_text("✅")
-            logger.info(f"✅ Photo forwarded to {partner_id}")
+            logger.info(f"✅ Photo sent to {partner_id}")
+            
+        # ============ متن ============
+        elif update.message.text:
+            logger.info(f"📝 Text from {sender_id}: {update.message.text[:50]}")
+            await context.bot.send_message(
+                chat_id=partner_id,
+                text=update.message.text
+            )
+            await update.message.reply_text("✅")
+            logger.info(f"✅ Text sent to {partner_id}")
             
         # ============ استیکر ============
         elif update.message.sticker:
@@ -1139,7 +1157,7 @@ async def handle_chat_message(update: Update, context: ContextTypes.DEFAULT_TYPE
             logger.info(f"✅ Document sent to {partner_id}")
             
         else:
-            logger.warning(f"❌ Unsupported message type from {sender_id}")
+            logger.warning(f"❌ Unsupported message from {sender_id}")
             await update.message.reply_text("❌ این نوع پیام پشتیبانی نمی‌شه!")
             
     except Exception as e:
@@ -1660,6 +1678,7 @@ async def help_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
         "• هر چت ۳ روز اعتبار داره\n"
         "• حداکثر ۳ چت همزمان فعال میتونی داشته باشی\n"
         "• افراد رد شده تا ۱ هفته دوباره نمایش داده نمیشن\n"
+        "• افراد بلاک شده دیگه به هم نمایش داده نمیشن\n"
         "• برای تغییر اطلاعات از بخش ویرایش پروفایل استفاده کن\n"
         "• عکس پروفایل رو میتونی در مرحله ثبت‌نام یا ویرایش پروفایل آپلود کنی",
         reply_markup=main_menu_keyboard()
@@ -1746,18 +1765,16 @@ def main():
     application.add_handler(CallbackQueryHandler(privacy_toggle, pattern='^privacy_toggle_(age|city|change_visibility)$'))
     
     # ============ هندلر اصلی پیام‌ها ============
-    # این هندلر باید آخرین هندلر اضافه بشه تا اولویت پایین‌تری داشته باشه
     application.add_handler(
         MessageHandler(
             filters.ALL & ~filters.COMMAND, 
             handle_chat_message
         ),
-        group=1  # گروه پایین‌تر برای اینکه بعد از هندلرهای دیگه اجرا بشه
+        group=1
     )
     
     logger.info("Bot started with Polling!")
     
-    # اجرای ربات با همه نوع آپدیت
     application.run_polling(
         allowed_updates=[
             'message', 
