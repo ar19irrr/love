@@ -1032,12 +1032,17 @@ async def start_chat(update: Update, context: ContextTypes.DEFAULT_TYPE):
     except:
         pass
 
-# ============ هندلر اصلی چت - بدون فوروارد ============
+# ============ هندلر اصلی چت - بدون فوروارد با شرط ثبت‌نام ============
 async def handle_chat_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
     logger.info(f"📩 handle_chat_message CALLED! user={update.effective_user.id}")
     
     if not update.message:
         logger.warning(f"❌ No message in update")
+        return
+    
+    # ============ مهم: اگر کاربر در حال ثبت‌نامه، هندلر رو نادیده بگیر ============
+    if 'editing_field' in context.user_data or 'gender' in context.user_data:
+        logger.info(f"⏭️ User is in registration/editing mode, skipping chat handler")
         return
     
     logger.info(f"📩 Has text: {bool(update.message.text)}")
@@ -1051,7 +1056,8 @@ async def handle_chat_message(update: Update, context: ContextTypes.DEFAULT_TYPE
     
     if 'active_chat' not in context.user_data:
         logger.warning(f"❌ No active chat for user {update.effective_user.id}")
-        await update.message.reply_text("❌ شما در هیچ چتی نیستی!", reply_markup=main_menu_keyboard())
+        # اینجا پیام ارور رو حذف میکنیم تا با ثبت‌نام تداخل نداشته باشه
+        # await update.message.reply_text("❌ شما در هیچ چتی نیستی!", reply_markup=main_menu_keyboard())
         return
     
     chat_id = context.user_data['active_chat']
