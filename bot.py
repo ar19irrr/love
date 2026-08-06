@@ -864,8 +864,7 @@ async def show_candidate(update: Update, context: ContextTypes.DEFAULT_TYPE):
             "می‌تونی دوباره جستجو کنی.",
             reply_markup=main_menu_keyboard()
         )
-        return
-    
+        return    
     candidate = candidates[index]
     user_dict = dict(candidate)
     
