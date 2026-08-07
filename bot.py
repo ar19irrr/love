@@ -941,8 +941,23 @@ async def candidate_action(update: Update, context: ContextTypes.DEFAULT_TYPE):
                 try:
                     target_user = get_user_dict(target_id)
                     if target_user:
-                        user_photo = get_user_photo(user_id)
                         sender_name = get_user_display_name(user_id)
+                        
+                        # دریافت عکس کاربر
+                        user_photo = None
+                        sender = get_user_dict(user_id)
+                        if sender and sender.get('no_photo', 0) != 1:
+                            if sender.get('photo_file_id'):
+                                user_photo = sender['photo_file_id']
+                        
+                        # اگر عکس نداشت، از تلگرام بگیر
+                        if not user_photo:
+                            try:
+                                user_photos = await context.bot.get_user_profile_photos(user_id, limit=1)
+                                if user_photos.total_count > 0:
+                                    user_photo = user_photos.photos[0][-1].file_id
+                            except:
+                                pass
                         
                         message_text = (
                             f"📩 **{sender_name} به شما علاقه داره!**\n\n"
@@ -962,7 +977,8 @@ async def candidate_action(update: Update, context: ContextTypes.DEFAULT_TYPE):
                                         [InlineKeyboardButton("❌ رد", callback_data=f"reject_{user_id}")]
                                     ])
                                 )
-                            except:
+                            except Exception as e:
+                                logger.error(f"Error sending photo in like: {e}")
                                 await context.bot.send_message(
                                     target_id,
                                     message_text + "\n\n(عکس قابل ارسال نبود)",
@@ -1015,7 +1031,6 @@ async def candidate_action(update: Update, context: ContextTypes.DEFAULT_TYPE):
                 message += "\n📝 توضیحی ندارد"
             
             await query.edit_message_text(message, reply_markup=InlineKeyboardMarkup([[InlineKeyboardButton("🔙 برگشت", callback_data=f"back_{target_id}")]]))
-
 # ============ مشاهده پروفایل با عکس ============
 async def view_requester(update: Update, context: ContextTypes.DEFAULT_TYPE):
     query = update.callback_query
@@ -1058,9 +1073,27 @@ async def view_requester(update: Update, context: ContextTypes.DEFAULT_TYPE):
         [InlineKeyboardButton("🔙 برگشت", callback_data="back_to_menu")]
     ]
     
-    user_photo = get_user_photo(requester_id)
+    # ============ دریافت عکس ============
+    user_photo = None
+    
+    # اول: چک کن کاربر عکس آپلود کرده و no_photo فعال نیست
+    if requester.get('no_photo', 0) != 1:
+        if requester.get('photo_file_id'):
+            user_photo = requester['photo_file_id']
+    
+    # اگر عکس نداشت، سعی کن از تلگرام بگیره
+    if not user_photo:
+        try:
+            user_photos = await context.bot.get_user_profile_photos(requester_id, limit=1)
+            if user_photos.total_count > 0:
+                user_photo = user_photos.photos[0][-1].file_id
+        except:
+            pass
+    
+    # ارسال با عکس یا بدون عکس
     if user_photo:
         try:
+            # حذف پیام قبلی و ارسال عکس با کپشن
             await query.message.delete()
             await context.bot.send_photo(
                 chat_id=update.effective_user.id,
@@ -1070,10 +1103,21 @@ async def view_requester(update: Update, context: ContextTypes.DEFAULT_TYPE):
                 reply_markup=InlineKeyboardMarkup(keyboard)
             )
             return
-        except:
-            pass
-    
-    await query.edit_message_text(message, parse_mode='Markdown', reply_markup=InlineKeyboardMarkup(keyboard))
+        except Exception as e:
+            logger.error(f"Error sending photo in view_requester: {e}")
+            # اگر عکس ارسال نشد، پیام متنی بفرست
+            await query.edit_message_text(
+                message,
+                parse_mode='Markdown',
+                reply_markup=InlineKeyboardMarkup(keyboard)
+            )
+    else:
+        # بدون عکس
+        await query.edit_message_text(
+            message + "\n\n📸 **عکس:** تنظیم نشده",
+            parse_mode='Markdown',
+            reply_markup=InlineKeyboardMarkup(keyboard)
+        )
 
 # ============ مدیریت درخواست‌ها ============
 async def handle_request(update: Update, context: ContextTypes.DEFAULT_TYPE):
