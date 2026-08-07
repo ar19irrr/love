@@ -9,12 +9,18 @@ from datetime import datetime, timedelta
 from typing import Optional, List, Dict, Any
 from telegram import Update, InlineKeyboardButton, InlineKeyboardMarkup
 from telegram.ext import Application, CommandHandler, CallbackQueryHandler, MessageHandler, filters, ContextTypes, ConversationHandler
-from flask import Flask, jsonify
+from flask import Flask, jsonify, request
 
 # ============ تنظیمات اولیه ============
 TOKEN = os.environ.get('TOKEN', "YOUR_BOT_TOKEN_HERE")
 PORT = int(os.environ.get('PORT', 10000))
 ADMIN_ID = int(os.environ.get('ADMIN_ID', 0))
+
+# تنظیمات آنتی‌اسپم
+ANTI_SPAM_ENABLED = True
+MAX_MESSAGES_PER_MINUTE = 10
+MAX_MESSAGES_PER_HOUR = 50
+SPAM_BLOCK_DURATION = 60  # دقیقه
 
 logging.basicConfig(
     format='%(asctime)s - %(name)s - %(levelname)s - %(message)s',
@@ -81,7 +87,9 @@ class Database:
             is_setup_complete BOOLEAN DEFAULT 0,
             report_count INTEGER DEFAULT 0,
             is_banned BOOLEAN DEFAULT 0,
-            no_photo BOOLEAN DEFAULT 0
+            no_photo BOOLEAN DEFAULT 0,
+            spam_warnings INTEGER DEFAULT 0,
+            spam_blocked_until TIMESTAMP
         )''')
         
         cursor.execute('''CREATE TABLE IF NOT EXISTS requests (
@@ -156,6 +164,14 @@ class Database:
             status TEXT DEFAULT 'pending'
         )''')
         
+        cursor.execute('''CREATE TABLE IF NOT EXISTS spam_log (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            user_id INTEGER,
+            chat_id INTEGER,
+            message TEXT,
+            timestamp TIMESTAMP
+        )''')
+        
         cursor.execute("CREATE INDEX IF NOT EXISTS idx_users_age ON users(age)")
         cursor.execute("CREATE INDEX IF NOT EXISTS idx_users_purpose ON users(purpose)")
         cursor.execute("CREATE INDEX IF NOT EXISTS idx_users_city ON users(city)")
@@ -179,6 +195,8 @@ class Database:
         cursor.execute("CREATE INDEX IF NOT EXISTS idx_admin_blocks_user ON admin_blocks(blocked_user_id)")
         cursor.execute("CREATE INDEX IF NOT EXISTS idx_support_user ON support_messages(user_id)")
         cursor.execute("CREATE INDEX IF NOT EXISTS idx_support_status ON support_messages(status)")
+        cursor.execute("CREATE INDEX IF NOT EXISTS idx_spam_user ON spam_log(user_id)")
+        cursor.execute("CREATE INDEX IF NOT EXISTS idx_spam_time ON spam_log(timestamp)")
         
         self.conn.commit()
         logger.info("✅ Database initialized successfully!")
@@ -290,6 +308,66 @@ def get_user_display_name(user_id: int) -> str:
         return user['display_name']
     return f"کاربر {user_id}"
 
+# ============ توابع آنتی‌اسپم ============
+def check_spam(user_id: int, chat_id: int) -> bool:
+    """بررسی اسپم بودن کاربر"""
+    if not ANTI_SPAM_ENABLED:
+        return False
+    
+    user = get_user_dict(user_id)
+    if not user:
+        return False
+    
+    # بررسی بلاک اسپم
+    if user.get('spam_blocked_until'):
+        blocked_until = datetime.fromisoformat(user['spam_blocked_until'])
+        if blocked_until > datetime.now():
+            return True
+    
+    # بررسی تعداد پیام در دقیقه
+    minute_ago = datetime.now() - timedelta(minutes=1)
+    messages_minute = db.fetchone(
+        "SELECT COUNT(*) FROM spam_log WHERE user_id=? AND timestamp > ?",
+        (user_id, minute_ago)
+    )[0]
+    
+    if messages_minute >= MAX_MESSAGES_PER_MINUTE:
+        return True
+    
+    # بررسی تعداد پیام در ساعت
+    hour_ago = datetime.now() - timedelta(hours=1)
+    messages_hour = db.fetchone(
+        "SELECT COUNT(*) FROM spam_log WHERE user_id=? AND timestamp > ?",
+        (user_id, hour_ago)
+    )[0]
+    
+    if messages_hour >= MAX_MESSAGES_PER_HOUR:
+        return True
+    
+    return False
+
+def log_spam(user_id: int, chat_id: int, message: str):
+    """ثبت اسپم در لاگ"""
+    db.execute("""
+        INSERT INTO spam_log (user_id, chat_id, message, timestamp)
+        VALUES (?, ?, ?, ?)
+    """, (user_id, chat_id, message, datetime.now()))
+    
+    # افزایش تعداد هشدارها
+    user = get_user_dict(user_id)
+    if user:
+        warnings = user.get('spam_warnings', 0) + 1
+        if warnings >= 5:  # بعد از 5 هشدار، بلاک شود
+            block_until = datetime.now() + timedelta(minutes=SPAM_BLOCK_DURATION)
+            save_user(user_id, {
+                'spam_warnings': warnings,
+                'spam_blocked_until': block_until.isoformat()
+            })
+            return True
+        else:
+            save_user(user_id, {'spam_warnings': warnings})
+    return False
+
 # ============ کیبوردها ============
 def main_menu_keyboard(is_admin: bool = False):
     keyboard = [
@@ -324,12 +402,48 @@ def chat_keyboard(other_user: int, chat_id: int):
 
 def admin_panel_keyboard():
     return InlineKeyboardMarkup([
+        [InlineKeyboardButton("👤 مدیریت کاربران", callback_data="admin_users")],
+        [InlineKeyboardButton("💬 مدیریت چت‌ها", callback_data="admin_chats")],
+        [InlineKeyboardButton("📋 مدیریت گزارش‌ها", callback_data="admin_reports")],
+        [InlineKeyboardButton("📞 مدیریت پشتیبانی", callback_data="admin_support")],
+        [InlineKeyboardButton("📊 آمار ربات", callback_data="admin_stats")],
+        [InlineKeyboardButton("📈 آمار هفتگی", callback_data="admin_weekly_stats")],
+        [InlineKeyboardButton("📤 ارسال همگانی", callback_data="admin_broadcast")],
+        [InlineKeyboardButton("🛡️ تنظیمات آنتی‌اسپم", callback_data="admin_antispam")],
+        [InlineKeyboardButton("🔙 برگشت", callback_data="back_to_menu")]
+    ])
+
+def admin_users_keyboard():
+    return InlineKeyboardMarkup([
+        [InlineKeyboardButton("🔍 جستجوی کاربر", callback_data="admin_search_user")],
+        [InlineKeyboardButton("📋 لیست همه کاربران", callback_data="admin_all_users")],
         [InlineKeyboardButton("🚫 بلاک کاربر", callback_data="admin_block_user")],
         [InlineKeyboardButton("✅ آنبلاک کاربر", callback_data="admin_unblock_user")],
-        [InlineKeyboardButton("📋 گزارش‌ها", callback_data="admin_reports")],
-        [InlineKeyboardButton("📞 پشتیبانی", callback_data="admin_support")],
-        [InlineKeyboardButton("📊 آمار", callback_data="admin_stats")],
-        [InlineKeyboardButton("🔙 برگشت", callback_data="back_to_menu")]
+        [InlineKeyboardButton("🔙 برگشت", callback_data="admin_panel")]
+    ])
+
+def admin_chats_keyboard():
+    return InlineKeyboardMarkup([
+        [InlineKeyboardButton("📋 لیست چت‌های فعال", callback_data="admin_active_chats")],
+        [InlineKeyboardButton("📊 آمار چت‌ها", callback_data="admin_chat_stats")],
+        [InlineKeyboardButton("🔙 برگشت", callback_data="admin_panel")]
+    ])
+
+def admin_reports_keyboard():
+    return InlineKeyboardMarkup([
+        [InlineKeyboardButton("📋 همه گزارش‌ها", callback_data="admin_all_reports")],
+        [InlineKeyboardButton("⏳ در انتظار", callback_data="admin_reports_pending")],
+        [InlineKeyboardButton("✅ تایید شده", callback_data="admin_reports_resolved")],
+        [InlineKeyboardButton("❌ رد شده", callback_data="admin_reports_rejected")],
+        [InlineKeyboardButton("🔙 برگشت", callback_data="admin_panel")]
+    ])
+
+def admin_antispam_keyboard():
+    status = "✅ فعال" if ANTI_SPAM_ENABLED else "❌ غیرفعال"
+    return InlineKeyboardMarkup([
+        [InlineKeyboardButton(f"🛡️ وضعیت: {status}", callback_data="admin_toggle_antispam")],
+        [InlineKeyboardButton("📋 لیست بلاک‌های اسپم", callback_data="admin_spam_list")],
+        [InlineKeyboardButton("🔙 برگشت", callback_data="admin_panel")]
     ])
 
 def get_interests_keyboard(selected=None):
@@ -778,7 +892,9 @@ async def finish_registration(update: Update, context: ContextTypes.DEFAULT_TYPE
         'last_active': datetime.now(),
         'is_setup_complete': 1,
         'is_banned': 0,
-        'report_count': 0
+        'report_count': 0,
+        'spam_warnings': 0,
+        'spam_blocked_until': None
     }
     
     if save_user(user_id, user_data):
@@ -943,14 +1059,12 @@ async def candidate_action(update: Update, context: ContextTypes.DEFAULT_TYPE):
                     if target_user:
                         sender_name = get_user_display_name(user_id)
                         
-                        # دریافت عکس کاربر
                         user_photo = None
                         sender = get_user_dict(user_id)
                         if sender and sender.get('no_photo', 0) != 1:
                             if sender.get('photo_file_id'):
                                 user_photo = sender['photo_file_id']
                         
-                        # اگر عکس نداشت، از تلگرام بگیر
                         if not user_photo:
                             try:
                                 user_photos = await context.bot.get_user_profile_photos(user_id, limit=1)
@@ -1031,6 +1145,7 @@ async def candidate_action(update: Update, context: ContextTypes.DEFAULT_TYPE):
                 message += "\n📝 توضیحی ندارد"
             
             await query.edit_message_text(message, reply_markup=InlineKeyboardMarkup([[InlineKeyboardButton("🔙 برگشت", callback_data=f"back_{target_id}")]]))
+
 # ============ مشاهده پروفایل با عکس ============
 async def view_requester(update: Update, context: ContextTypes.DEFAULT_TYPE):
     query = update.callback_query
@@ -1073,15 +1188,11 @@ async def view_requester(update: Update, context: ContextTypes.DEFAULT_TYPE):
         [InlineKeyboardButton("🔙 برگشت", callback_data="back_to_menu")]
     ]
     
-    # ============ دریافت عکس ============
     user_photo = None
-    
-    # اول: چک کن کاربر عکس آپلود کرده و no_photo فعال نیست
     if requester.get('no_photo', 0) != 1:
         if requester.get('photo_file_id'):
             user_photo = requester['photo_file_id']
     
-    # اگر عکس نداشت، سعی کن از تلگرام بگیره
     if not user_photo:
         try:
             user_photos = await context.bot.get_user_profile_photos(requester_id, limit=1)
@@ -1090,10 +1201,8 @@ async def view_requester(update: Update, context: ContextTypes.DEFAULT_TYPE):
         except:
             pass
     
-    # ارسال با عکس یا بدون عکس
     if user_photo:
         try:
-            # حذف پیام قبلی و ارسال عکس با کپشن
             await query.message.delete()
             await context.bot.send_photo(
                 chat_id=update.effective_user.id,
@@ -1105,14 +1214,12 @@ async def view_requester(update: Update, context: ContextTypes.DEFAULT_TYPE):
             return
         except Exception as e:
             logger.error(f"Error sending photo in view_requester: {e}")
-            # اگر عکس ارسال نشد، پیام متنی بفرست
             await query.edit_message_text(
                 message,
                 parse_mode='Markdown',
                 reply_markup=InlineKeyboardMarkup(keyboard)
             )
     else:
-        # بدون عکس
         await query.edit_message_text(
             message + "\n\n📸 **عکس:** تنظیم نشده",
             parse_mode='Markdown',
@@ -1457,6 +1564,21 @@ async def handle_chat_message(update: Update, context: ContextTypes.DEFAULT_TYPE
     
     user_id = update.effective_user.id
     user = get_user(user_id)
+    chat_id = update.effective_chat.id
+    message_text = update.message.text or ""
+    
+    # ============ بررسی آنتی‌اسپم ============
+    if check_spam(user_id, chat_id):
+        await update.message.reply_text(
+            "🚫 **شما به دلیل ارسال پیام‌های زیاد مسدود شده‌اید!**\n\n"
+            f"⏳ مدت زمان بلاک: {SPAM_BLOCK_DURATION} دقیقه\n\n"
+            "لطفاً صبور باشید و بعداً دوباره تلاش کنید.",
+            parse_mode='Markdown'
+        )
+        return
+    
+    # ثبت پیام برای آنتی‌اسپم
+    log_spam(user_id, chat_id, message_text)
     
     # ============ بررسی: آیا کاربر ادمین است و در حالت پاسخگویی؟ ============
     if user_id == ADMIN_ID and context.user_data.get('admin_reply_to'):
@@ -1576,6 +1698,7 @@ async def handle_chat_message(update: Update, context: ContextTypes.DEFAULT_TYPE
     except Exception as e:
         logger.error(f"Error sending message: {e}")
         await update.message.reply_text("❌ ارسال ناموفق!")
+
 # ============ بلاک توسط کاربر ============
 async def block_user(update: Update, context: ContextTypes.DEFAULT_TYPE):
     query = update.callback_query
@@ -1975,7 +2098,6 @@ async def admin_reply(update: Update, context: ContextTypes.DEFAULT_TYPE):
         await query.edit_message_text("❌ خطا!", reply_markup=admin_panel_keyboard())
         return
     
-    # ذخیره آیدی کاربر برای پاسخ
     context.user_data['admin_reply_to'] = user_id
     
     user = get_user_dict(user_id)
@@ -2015,7 +2137,6 @@ async def admin_send_reply(update: Update, context: ContextTypes.DEFAULT_TYPE):
         return
     
     try:
-        # ارسال مستقیم به کاربر
         await context.bot.send_message(
             user_id,
             f"📞 **پاسخ از پشتیبانی**\n\n{reply_text}\n\n"
@@ -2024,7 +2145,6 @@ async def admin_send_reply(update: Update, context: ContextTypes.DEFAULT_TYPE):
             reply_markup=main_menu_keyboard()
         )
         
-        # بستن پیام‌های پشتیبانی این کاربر
         db.execute("UPDATE support_messages SET status='replied' WHERE user_id=? AND status='pending'", (user_id,))
         
         await update.message.reply_text(
@@ -2045,6 +2165,7 @@ async def admin_send_reply(update: Update, context: ContextTypes.DEFAULT_TYPE):
             reply_markup=admin_panel_keyboard()
         )
         context.user_data.pop('admin_reply_to', None)
+
 async def admin_close_support(update: Update, context: ContextTypes.DEFAULT_TYPE):
     query = update.callback_query
     await query.answer()
@@ -2576,9 +2697,15 @@ async def admin_panel(update: Update, context: ContextTypes.DEFAULT_TYPE):
         await query.edit_message_text("❌ دسترسی ندارید!", reply_markup=main_menu_keyboard())
         return
     
-    await query.edit_message_text("👑 **پنل مدیریت**", parse_mode='Markdown', reply_markup=admin_panel_keyboard())
+    await query.edit_message_text(
+        "👑 **پنل مدیریت**\n\n"
+        "از دکمه‌های زیر برای مدیریت ربات استفاده کنید:",
+        parse_mode='Markdown',
+        reply_markup=admin_panel_keyboard()
+    )
 
-async def admin_block_user(update: Update, context: ContextTypes.DEFAULT_TYPE):
+# ============ مدیریت کاربران ============
+async def admin_users(update: Update, context: ContextTypes.DEFAULT_TYPE):
     query = update.callback_query
     await query.answer()
     
@@ -2587,13 +2714,13 @@ async def admin_block_user(update: Update, context: ContextTypes.DEFAULT_TYPE):
         return
     
     await query.edit_message_text(
-        "🚫 **بلاک کاربر**\n\nآیدی کاربر رو وارد کن:",
+        "👤 **مدیریت کاربران**\n\n"
+        "از دکمه‌های زیر استفاده کنید:",
         parse_mode='Markdown',
-        reply_markup=InlineKeyboardMarkup([[InlineKeyboardButton("🔙 برگشت", callback_data="admin_panel")]])
+        reply_markup=admin_users_keyboard()
     )
-    context.user_data['admin_action'] = 'block'
 
-async def admin_unblock_user(update: Update, context: ContextTypes.DEFAULT_TYPE):
+async def admin_search_user(update: Update, context: ContextTypes.DEFAULT_TYPE):
     query = update.callback_query
     await query.answer()
     
@@ -2601,57 +2728,138 @@ async def admin_unblock_user(update: Update, context: ContextTypes.DEFAULT_TYPE)
         await query.edit_message_text("❌ دسترسی ندارید!", reply_markup=main_menu_keyboard())
         return
     
-    blocked = get_admin_blocked_users()
+    await query.edit_message_text(
+        "🔍 **جستجوی کاربر**\n\n"
+        "آیدی یا نام کاربر را وارد کنید:",
+        parse_mode='Markdown',
+        reply_markup=InlineKeyboardMarkup([
+            [InlineKeyboardButton("🔙 برگشت", callback_data="admin_users")]
+        ])
+    )
+    context.user_data['admin_action'] = 'search_user'
+
+async def admin_all_users(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    query = update.callback_query
+    await query.answer()
     
-    if not blocked:
-        await query.edit_message_text("📋 کسی بلاک نشده!", reply_markup=admin_panel_keyboard())
+    if update.effective_user.id != ADMIN_ID:
+        await query.edit_message_text("❌ دسترسی ندارید!", reply_markup=main_menu_keyboard())
         return
     
-    message = "📋 لیست بلاک‌شده‌ها:\n\n"
-    keyboard = []
+    users = db.fetchall("SELECT * FROM users WHERE is_setup_complete=1 ORDER BY created_at DESC LIMIT 20")
     
-    for user_id in blocked:
-        user = get_user_dict(user_id)
-        if user:
-            display_name = user.get('display_name', f"کاربر {user_id}")
-            message += f"👤 {display_name} ({user_id})\n"
-            keyboard.append([InlineKeyboardButton(f"✅ آنبلاک {display_name}", callback_data=f"admin_unblock_{user_id}")])
+    if not users:
+        await query.edit_message_text("📭 هیچ کاربری یافت نشد!", reply_markup=admin_users_keyboard())
+        return
     
-    keyboard.append([InlineKeyboardButton("🔙 برگشت", callback_data="admin_panel")])
+    message = "📋 **لیست کاربران (۲۰ نفر آخر)**\n\n"
+    for user in users:
+        message += f"👤 {user['display_name']} ({user['user_id']})\n"
+        message += f"   🧑 {user['gender']} | {user['age']} سال | {user['city']}\n"
+        message += f"   📅 {user['created_at'][:10]}\n\n"
     
-    await query.edit_message_text(message, reply_markup=InlineKeyboardMarkup(keyboard))
+    await query.edit_message_text(
+        message,
+        parse_mode='Markdown',
+        reply_markup=admin_users_keyboard()
+    )
 
-async def admin_do_block(update: Update, context: ContextTypes.DEFAULT_TYPE):
+async def admin_do_search_user(update: Update, context: ContextTypes.DEFAULT_TYPE):
     if update.effective_user.id != ADMIN_ID:
         return
     
-    try:
-        user_id = int(update.message.text)
-    except ValueError:
-        await update.message.reply_text("❌ عدد وارد کن!", reply_markup=admin_panel_keyboard())
-        context.user_data.pop('admin_action', None)
-        return
-    
-    user = get_user(user_id)
-    if not user:
-        await update.message.reply_text(f"❌ {user_id} پیدا نشد!", reply_markup=admin_panel_keyboard())
-        context.user_data.pop('admin_action', None)
-        return
-    
-    db.execute("INSERT OR REPLACE INTO admin_blocks (admin_id, blocked_user_id, reason, created_at) VALUES (?, ?, ?, ?)", 
-              (ADMIN_ID, user_id, "بلاک توسط ادمین", datetime.now()))
-    
-    db.execute("UPDATE chats SET is_active=0 WHERE user1=? OR user2=?", (user_id, user_id))
+    search_text = update.message.text.strip()
     
     try:
-        await context.bot.send_message(user_id, "🚫 شما توسط مدیریت بلاک شدید!")
+        # جستجو با آیدی
+        user_id = int(search_text)
+        user = get_user_dict(user_id)
+        if user:
+            await show_user_profile(update, context, user)
+            return
     except:
         pass
     
-    await update.message.reply_text(f"✅ {user_id} بلاک شد!", reply_markup=admin_panel_keyboard())
-    context.user_data.pop('admin_action', None)
+    # جستجو با نام
+    users = db.fetchall(
+        "SELECT * FROM users WHERE display_name LIKE ? AND is_setup_complete=1 LIMIT 10",
+        (f"%{search_text}%",)
+    )
+    
+    if not users:
+        await update.message.reply_text(
+            f"❌ کاربری با '{search_text}' پیدا نشد!",
+            reply_markup=admin_users_keyboard()
+        )
+        return
+    
+    message = f"🔍 **نتایج جستجو برای '{search_text}':**\n\n"
+    keyboard = []
+    for user in users:
+        message += f"👤 {user['display_name']} ({user['user_id']})\n"
+        keyboard.append([InlineKeyboardButton(
+            f"📋 مشاهده {user['display_name']}",
+            callback_data=f"admin_view_user_{user['user_id']}"
+        )])
+    
+    keyboard.append([InlineKeyboardButton("🔙 برگشت", callback_data="admin_users")])
+    
+    await update.message.reply_text(
+        message,
+        parse_mode='Markdown',
+        reply_markup=InlineKeyboardMarkup(keyboard)
+    )
 
-async def admin_do_unblock(update: Update, context: ContextTypes.DEFAULT_TYPE):
+async def show_user_profile(update: Update, context: ContextTypes.DEFAULT_TYPE, user: dict):
+    """نمایش پروفایل کامل یک کاربر"""
+    message = f"👤 **پروفایل کاربر**\n\n"
+    message += f"🆔 آیدی: `{user['user_id']}`\n"
+    message += f"👤 نام: {user['display_name']}\n"
+    message += f"🧑 جنسیت: {user['gender']}\n"
+    message += f"📅 سن: {user['age']}\n"
+    message += f"🎯 هدف: {user['purpose']}\n"
+    message += f"🏙️ شهر: {user['city']}\n"
+    message += f"💼 وضعیت: {user['job_status']}\n"
+    
+    interests = json.loads(user['interests']) if user['interests'] else []
+    message += f"🎨 علایق: {', '.join(interests) if interests else '❌'}\n"
+    message += f"📝 توضیحات: {user['description'][:50] if user['description'] else '❌'}\n"
+    message += f"📸 عکس: {'✅' if user['photo_file_id'] else '❌'}\n"
+    message += f"📅 ثبت‌نام: {user['created_at'][:16]}\n"
+    message += f"🔄 آخرین فعالیت: {user['last_active'][:16] if user['last_active'] else 'نامشخص'}\n"
+    message += f"🚫 بلاک شده: {'✅' if user['is_banned'] else '❌'}\n"
+    
+    # آمار کاربر
+    sent_requests = db.fetchone("SELECT COUNT(*) FROM requests WHERE from_user=?", (user['user_id'],))[0]
+    recv_requests = db.fetchone("SELECT COUNT(*) FROM requests WHERE to_user=?", (user['user_id'],))[0]
+    active_chats = db.fetchone("SELECT COUNT(*) FROM chats WHERE (user1=? OR user2=?) AND is_active=1", (user['user_id'], user['user_id']))[0]
+    
+    message += f"\n📊 **آمار کاربر:**\n"
+    message += f"📤 درخواست‌های ارسالی: {sent_requests}\n"
+    message += f"📥 درخواست‌های دریافتی: {recv_requests}\n"
+    message += f"💬 چت‌های فعال: {active_chats}\n"
+    
+    keyboard = [
+        [InlineKeyboardButton("🚫 بلاک کاربر", callback_data=f"admin_block_{user['user_id']}")],
+        [InlineKeyboardButton("✅ آنبلاک کاربر", callback_data=f"admin_unblock_{user['user_id']}")],
+        [InlineKeyboardButton("🔙 برگشت", callback_data="admin_users")]
+    ]
+    
+    if isinstance(update, Update) and update.callback_query:
+        query = update.callback_query
+        await query.edit_message_text(
+            message,
+            parse_mode='Markdown',
+            reply_markup=InlineKeyboardMarkup(keyboard)
+        )
+    else:
+        await update.message.reply_text(
+            message,
+            parse_mode='Markdown',
+            reply_markup=InlineKeyboardMarkup(keyboard)
+        )
+
+async def admin_view_user(update: Update, context: ContextTypes.DEFAULT_TYPE):
     query = update.callback_query
     await query.answer()
     
@@ -2660,21 +2868,164 @@ async def admin_do_unblock(update: Update, context: ContextTypes.DEFAULT_TYPE):
         return
     
     try:
-        user_id = int(query.data.replace("admin_unblock_", ""))
+        user_id = int(query.data.replace("admin_view_user_", ""))
+    except:
+        await query.edit_message_text("❌ خطا!", reply_markup=admin_users_keyboard())
+        return
+    
+    user = get_user_dict(user_id)
+    if not user:
+        await query.edit_message_text("❌ کاربر پیدا نشد!", reply_markup=admin_users_keyboard())
+        return
+    
+    await show_user_profile(update, context, user)
+
+# ============ مدیریت چت‌ها ============
+async def admin_chats(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    query = update.callback_query
+    await query.answer()
+    
+    if update.effective_user.id != ADMIN_ID:
+        await query.edit_message_text("❌ دسترسی ندارید!", reply_markup=main_menu_keyboard())
+        return
+    
+    await query.edit_message_text(
+        "💬 **مدیریت چت‌ها**\n\n"
+        "از دکمه‌های زیر استفاده کنید:",
+        parse_mode='Markdown',
+        reply_markup=admin_chats_keyboard()
+    )
+
+async def admin_active_chats(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    query = update.callback_query
+    await query.answer()
+    
+    if update.effective_user.id != ADMIN_ID:
+        await query.edit_message_text("❌ دسترسی ندارید!", reply_markup=main_menu_keyboard())
+        return
+    
+    chats = db.fetchall("SELECT * FROM chats WHERE is_active=1 ORDER BY last_message_at DESC LIMIT 20")
+    
+    if not chats:
+        await query.edit_message_text("📭 هیچ چت فعالی وجود ندارد!", reply_markup=admin_chats_keyboard())
+        return
+    
+    message = "💬 **لیست چت‌های فعال (۲۰ مورد آخر)**\n\n"
+    keyboard = []
+    for chat in chats:
+        user1 = get_user_dict(chat['user1'])
+        user2 = get_user_dict(chat['user2'])
+        name1 = user1['display_name'] if user1 else chat['user1']
+        name2 = user2['display_name'] if user2 else chat['user2']
+        message += f"🆔 {chat['id']}: {name1} ❤️ {name2}\n"
+        message += f"   📅 {chat['match_date'][:16]} | آخرین پیام: {chat['last_message_at'][:16] if chat['last_message_at'] else 'ندارد'}\n\n"
+        keyboard.append([InlineKeyboardButton(
+            f"📋 مشاهده چت {chat['id']}",
+            callback_data=f"admin_view_chat_{chat['id']}"
+        )])
+    
+    keyboard.append([InlineKeyboardButton("🔙 برگشت", callback_data="admin_chats")])
+    
+    await query.edit_message_text(
+        message,
+        parse_mode='Markdown',
+        reply_markup=InlineKeyboardMarkup(keyboard)
+    )
+
+async def admin_view_chat(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    query = update.callback_query
+    await query.answer()
+    
+    if update.effective_user.id != ADMIN_ID:
+        await query.edit_message_text("❌ دسترسی ندارید!", reply_markup=main_menu_keyboard())
+        return
+    
+    try:
+        chat_id = int(query.data.replace("admin_view_chat_", ""))
+    except:
+        await query.edit_message_text("❌ خطا!", reply_markup=admin_chats_keyboard())
+        return
+    
+    chat = get_chat_info(chat_id)
+    if not chat:
+        await query.edit_message_text("❌ چت پیدا نشد!", reply_markup=admin_chats_keyboard())
+        return
+    
+    user1 = get_user_dict(chat['user1'])
+    user2 = get_user_dict(chat['user2'])
+    name1 = user1['display_name'] if user1 else chat['user1']
+    name2 = user2['display_name'] if user2 else chat['user2']
+    
+    # دریافت پیام‌های چت
+    messages = db.fetchall(
+        "SELECT * FROM messages WHERE chat_id=? ORDER BY timestamp DESC LIMIT 10",
+        (chat_id,)
+    )
+    
+    message = f"📋 **جزئیات چت {chat_id}**\n\n"
+    message += f"👤 {name1} (ID: {chat['user1']})\n"
+    message += f"❤️ با ❤️\n"
+    message += f"👤 {name2} (ID: {chat['user2']})\n"
+    message += f"📅 تاریخ: {chat['match_date'][:16]}\n"
+    message += f"⏳ انقضا: {chat['expiry_date'][:16]}\n"
+    message += f"📌 وضعیت: {'✅ فعال' if chat['is_active'] else '❌ غیرفعال'}\n\n"
+    
+    if messages:
+        message += "📝 **آخرین ۱۰ پیام:**\n"
+        for msg in reversed(messages):
+            sender = user1['display_name'] if msg['sender_id'] == chat['user1'] else user2['display_name'] if msg['sender_id'] == chat['user2'] else msg['sender_id']
+            message += f"👤 {sender}: {msg['message_text'][:50]}\n"
+    else:
+        message += "📭 هیچ پیامی در این چت وجود ندارد."
+    
+    keyboard = [
+        [InlineKeyboardButton("❌ بستن چت", callback_data=f"admin_close_chat_{chat_id}")],
+        [InlineKeyboardButton("🔙 برگشت", callback_data="admin_active_chats")]
+    ]
+    
+    await query.edit_message_text(
+        message,
+        parse_mode='Markdown',
+        reply_markup=InlineKeyboardMarkup(keyboard)
+    )
+
+async def admin_close_chat(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    query = update.callback_query
+    await query.answer()
+    
+    if update.effective_user.id != ADMIN_ID:
+        await query.edit_message_text("❌ دسترسی ندارید!", reply_markup=main_menu_keyboard())
+        return
+    
+    try:
+        chat_id = int(query.data.replace("admin_close_chat_", ""))
     except:
         await query.edit_message_text("❌ خطا!", reply_markup=admin_panel_keyboard())
         return
     
-    db.execute("DELETE FROM admin_blocks WHERE blocked_user_id=?", (user_id,))
+    db.execute("UPDATE chats SET is_active=0 WHERE id=?", (chat_id,))
     
-    try:
-        await context.bot.send_message(user_id, "✅ شما توسط مدیریت آنبلاک شدید!")
-    except:
-        pass
+    # اطلاع به کاربران
+    chat = get_chat_info(chat_id)
+    if chat:
+        for user_id in [chat['user1'], chat['user2']]:
+            try:
+                await context.bot.send_message(
+                    user_id,
+                    f"🔴 **چت شما توسط مدیریت بسته شد!**\n\n"
+                    f"این چت به پایان رسید.",
+                    parse_mode='Markdown',
+                    reply_markup=main_menu_keyboard()
+                )
+            except:
+                pass
     
-    await query.edit_message_text(f"✅ {user_id} آنبلاک شد!", reply_markup=admin_panel_keyboard())
+    await query.edit_message_text(
+        f"✅ چت {chat_id} با موفقیت بسته شد!",
+        reply_markup=admin_chats_keyboard()
+    )
 
-async def admin_reports(update: Update, context: ContextTypes.DEFAULT_TYPE):
+async def admin_chat_stats(update: Update, context: ContextTypes.DEFAULT_TYPE):
     query = update.callback_query
     await query.answer()
     
@@ -2682,13 +3033,118 @@ async def admin_reports(update: Update, context: ContextTypes.DEFAULT_TYPE):
         await query.edit_message_text("❌ دسترسی ندارید!", reply_markup=main_menu_keyboard())
         return
     
-    reports = db.fetchall("SELECT * FROM reports WHERE status='pending' ORDER BY created_at DESC LIMIT 10")
+    total = db.fetchone("SELECT COUNT(*) FROM chats")[0]
+    active = db.fetchone("SELECT COUNT(*) FROM chats WHERE is_active=1")[0]
+    expired = db.fetchone("SELECT COUNT(*) FROM chats WHERE is_active=0")[0]
     
-    if not reports:
-        await query.edit_message_text("📋 گزارش جدیدی نیست!", reply_markup=admin_panel_keyboard())
+    # چت‌های امروز
+    today = datetime.now().strftime('%Y-%m-%d')
+    today_chats = db.fetchone("SELECT COUNT(*) FROM chats WHERE date(match_date)=?", (today,))[0]
+    
+    # چت‌های این هفته
+    week_ago = (datetime.now() - timedelta(days=7)).strftime('%Y-%m-%d')
+    week_chats = db.fetchone("SELECT COUNT(*) FROM chats WHERE date(match_date)>=?", (week_ago,))[0]
+    
+    # میانگین مدت چت
+    avg_duration = db.fetchone("""
+        SELECT AVG(julianday(expiry_date) - julianday(match_date)) 
+        FROM chats WHERE is_active=0
+    """)[0]
+    
+    message = f"📊 **آمار چت‌ها**\n\n"
+    message += f"📌 کل چت‌ها: {total}\n"
+    message += f"✅ چت‌های فعال: {active}\n"
+    message += f"❌ چت‌های منقضی: {expired}\n"
+    message += f"📅 چت‌های امروز: {today_chats}\n"
+    message += f"📅 چت‌های این هفته: {week_chats}\n"
+    message += f"⏱️ میانگین مدت چت: {round(avg_duration or 0, 1)} روز\n"
+    
+    await query.edit_message_text(
+        message,
+        parse_mode='Markdown',
+        reply_markup=admin_chats_keyboard()
+    )
+
+# ============ مدیریت گزارش‌ها ============
+async def admin_reports_menu(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    query = update.callback_query
+    await query.answer()
+    
+    if update.effective_user.id != ADMIN_ID:
+        await query.edit_message_text("❌ دسترسی ندارید!", reply_markup=main_menu_keyboard())
         return
     
-    message = "📋 **گزارش‌ها:**\n\n"
+    await query.edit_message_text(
+        "📋 **مدیریت گزارش‌ها**\n\n"
+        "از دکمه‌های زیر برای فیلتر گزارش‌ها استفاده کنید:",
+        parse_mode='Markdown',
+        reply_markup=admin_reports_keyboard()
+    )
+
+async def admin_all_reports(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    query = update.callback_query
+    await query.answer()
+    
+    if update.effective_user.id != ADMIN_ID:
+        await query.edit_message_text("❌ دسترسی ندارید!", reply_markup=main_menu_keyboard())
+        return
+    
+    await show_reports(update, context, status=None)
+
+async def admin_reports_pending(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    query = update.callback_query
+    await query.answer()
+    
+    if update.effective_user.id != ADMIN_ID:
+        await query.edit_message_text("❌ دسترسی ندارید!", reply_markup=main_menu_keyboard())
+        return
+    
+    await show_reports(update, context, status='pending')
+
+async def admin_reports_resolved(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    query = update.callback_query
+    await query.answer()
+    
+    if update.effective_user.id != ADMIN_ID:
+        await query.edit_message_text("❌ دسترسی ندارید!", reply_markup=main_menu_keyboard())
+        return
+    
+    await show_reports(update, context, status='resolved')
+
+async def admin_reports_rejected(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    query = update.callback_query
+    await query.answer()
+    
+    if update.effective_user.id != ADMIN_ID:
+        await query.edit_message_text("❌ دسترسی ندارید!", reply_markup=main_menu_keyboard())
+        return
+    
+    await show_reports(update, context, status='rejected')
+
+async def show_reports(update: Update, context: ContextTypes.DEFAULT_TYPE, status=None):
+    query = update.callback_query
+    
+    if status:
+        reports = db.fetchall(
+            "SELECT * FROM reports WHERE status=? ORDER BY created_at DESC LIMIT 20",
+            (status,)
+        )
+    else:
+        reports = db.fetchall("SELECT * FROM reports ORDER BY created_at DESC LIMIT 20")
+    
+    if not reports:
+        status_text = {
+            'pending': 'در انتظار',
+            'resolved': 'تایید شده',
+            'rejected': 'رد شده'
+        }.get(status, 'همه')
+        await query.edit_message_text(
+            f"📭 هیچ گزارش {status_text}ی وجود ندارد!",
+            reply_markup=admin_reports_keyboard()
+        )
+        return
+    
+    message = f"📋 **گزارش‌ها**\n\n"
     keyboard = []
     
     for r in reports:
@@ -2697,16 +3153,189 @@ async def admin_reports(update: Update, context: ContextTypes.DEFAULT_TYPE):
         reporter_name = reporter.get('display_name', r['reporter_id']) if reporter else r['reporter_id']
         reported_name = reported.get('display_name', r['reported_id']) if reported else r['reported_id']
         reason_text = {"a": "فحاشی", "s": "مزاحمت", "f": "کلاهبرداری", "i": "محتوای نامناسب"}.get(r['reason'], r['reason'])
-        message += f"🆔 {r['id']} - {reported_name} - {reason_text}\n"
-        keyboard.append([
-            InlineKeyboardButton(f"🚫 بلاک {reported_name}", callback_data=f"admin_block_from_report_{r['reported_id']}"),
-            InlineKeyboardButton(f"❌ رد", callback_data=f"admin_reject_report_{r['reported_id']}")
-        ])
+        status_text = {"pending": "⏳ در انتظار", "resolved": "✅ تایید", "rejected": "❌ رد"}.get(r['status'], r['status'])
+        message += f"🆔 {r['id']} | {reported_name} | {reason_text} | {status_text}\n"
+        message += f"   📅 {r['created_at'][:16]}\n\n"
+        keyboard.append([InlineKeyboardButton(
+            f"📋 جزئیات گزارش {r['id']}",
+            callback_data=f"admin_report_detail_{r['id']}"
+        )])
     
-    keyboard.append([InlineKeyboardButton("🔙 برگشت", callback_data="admin_panel")])
+    keyboard.append([InlineKeyboardButton("🔙 برگشت", callback_data="admin_reports")])
     
-    await query.edit_message_text(message, parse_mode='Markdown', reply_markup=InlineKeyboardMarkup(keyboard))
+    await query.edit_message_text(
+        message,
+        parse_mode='Markdown',
+        reply_markup=InlineKeyboardMarkup(keyboard)
+    )
 
+async def admin_report_detail(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    query = update.callback_query
+    await query.answer()
+    
+    if update.effective_user.id != ADMIN_ID:
+        await query.edit_message_text("❌ دسترسی ندارید!", reply_markup=main_menu_keyboard())
+        return
+    
+    try:
+        report_id = int(query.data.replace("admin_report_detail_", ""))
+    except:
+        await query.edit_message_text("❌ خطا!", reply_markup=admin_panel_keyboard())
+        return
+    
+    report = db.fetchone("SELECT * FROM reports WHERE id=?", (report_id,))
+    if not report:
+        await query.edit_message_text("❌ گزارش پیدا نشد!", reply_markup=admin_reports_keyboard())
+        return
+    
+    reporter = get_user_dict(report['reporter_id'])
+    reported = get_user_dict(report['reported_id'])
+    reporter_name = reporter.get('display_name', report['reporter_id']) if reporter else report['reporter_id']
+    reported_name = reported.get('display_name', report['reported_id']) if reported else report['reported_id']
+    reason_text = {"a": "فحاشی", "s": "مزاحمت", "f": "کلاهبرداری", "i": "محتوای نامناسب"}.get(report['reason'], report['reason'])
+    status_text = {"pending": "⏳ در انتظار", "resolved": "✅ تایید", "rejected": "❌ رد"}.get(report['status'], report['status'])
+    
+    message = f"📋 **جزئیات گزارش {report_id}**\n\n"
+    message += f"👤 گزارش‌دهنده: {reporter_name} (ID: {report['reporter_id']})\n"
+    message += f"👤 گزارش‌شونده: {reported_name} (ID: {report['reported_id']})\n"
+    message += f"📌 دلیل: {reason_text}\n"
+    message += f"📅 زمان: {report['created_at'][:16]}\n"
+    message += f"📌 وضعیت: {status_text}\n"
+    
+    # تاریخچه چت
+    if report['chat_id']:
+        messages = db.fetchall(
+            "SELECT sender_id, message_text, timestamp FROM messages WHERE chat_id=? ORDER BY timestamp DESC LIMIT 10",
+            (report['chat_id'],)
+        )
+        if messages:
+            message += f"\n📝 **آخرین ۱۰ پیام چت:**\n"
+            for msg in reversed(messages):
+                sender_name = "گزارش‌دهنده" if msg['sender_id'] == report['reporter_id'] else "گزارش‌شونده" if msg['sender_id'] == report['reported_id'] else f"کاربر {msg['sender_id']}"
+                message += f"👤 {sender_name}: {msg['message_text'][:50]}\n"
+    
+    keyboard = []
+    if report['status'] == 'pending':
+        keyboard.append([
+            InlineKeyboardButton("✅ تایید و بلاک", callback_data=f"admin_block_from_report_{report['reported_id']}"),
+            InlineKeyboardButton("❌ رد گزارش", callback_data=f"admin_reject_report_{report['reported_id']}")
+        ])
+    keyboard.append([InlineKeyboardButton("🔙 برگشت", callback_data="admin_reports")])
+    
+    await query.edit_message_text(
+        message,
+        parse_mode='Markdown',
+        reply_markup=InlineKeyboardMarkup(keyboard)
+    )
+
+# ============ آنتی‌اسپم ============
+async def admin_antispam(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    query = update.callback_query
+    await query.answer()
+    
+    if update.effective_user.id != ADMIN_ID:
+        await query.edit_message_text("❌ دسترسی ندارید!", reply_markup=main_menu_keyboard())
+        return
+    
+    await query.edit_message_text(
+        "🛡️ **تنظیمات آنتی‌اسپم**\n\n"
+        f"وضعیت: {'✅ فعال' if ANTI_SPAM_ENABLED else '❌ غیرفعال'}\n"
+        f"حداکثر پیام در دقیقه: {MAX_MESSAGES_PER_MINUTE}\n"
+        f"حداکثر پیام در ساعت: {MAX_MESSAGES_PER_HOUR}\n"
+        f"مدت بلاک: {SPAM_BLOCK_DURATION} دقیقه\n\n"
+        "از دکمه‌های زیر استفاده کنید:",
+        parse_mode='Markdown',
+        reply_markup=admin_antispam_keyboard()
+    )
+
+async def admin_toggle_antispam(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    query = update.callback_query
+    await query.answer()
+    
+    if update.effective_user.id != ADMIN_ID:
+        await query.edit_message_text("❌ دسترسی ندارید!", reply_markup=main_menu_keyboard())
+        return
+    
+    global ANTI_SPAM_ENABLED
+    ANTI_SPAM_ENABLED = not ANTI_SPAM_ENABLED
+    
+    await admin_antispam(update, context)
+
+async def admin_spam_list(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    query = update.callback_query
+    await query.answer()
+    
+    if update.effective_user.id != ADMIN_ID:
+        await query.edit_message_text("❌ دسترسی ندارید!", reply_markup=main_menu_keyboard())
+        return
+    
+    blocked_users = db.fetchall(
+        "SELECT user_id, spam_warnings, spam_blocked_until FROM users WHERE spam_blocked_until IS NOT NULL"
+    )
+    
+    if not blocked_users:
+        await query.edit_message_text(
+            "📭 هیچ کاربری به دلیل اسپم بلاک نشده است!",
+            reply_markup=admin_antispam_keyboard()
+        )
+        return
+    
+    message = "🚫 **لیست کاربران بلاک شده به دلیل اسپم**\n\n"
+    keyboard = []
+    for user in blocked_users:
+        user_dict = get_user_dict(user['user_id'])
+        display_name = user_dict.get('display_name', f"کاربر {user['user_id']}") if user_dict else f"کاربر {user['user_id']}"
+        blocked_until = datetime.fromisoformat(user['spam_blocked_until'])
+        remaining = (blocked_until - datetime.now()).total_seconds() / 60
+        message += f"👤 {display_name} ({user['user_id']})\n"
+        message += f"   ⚠️ هشدارها: {user['spam_warnings']}\n"
+        message += f"   ⏳ زمان باقی‌مانده: {int(remaining)} دقیقه\n\n"
+        keyboard.append([InlineKeyboardButton(
+            f"✅ آنبلاک {display_name}",
+            callback_data=f"admin_unblock_spam_{user['user_id']}"
+        )])
+    
+    keyboard.append([InlineKeyboardButton("🔙 برگشت", callback_data="admin_antispam")])
+    
+    await query.edit_message_text(
+        message,
+        parse_mode='Markdown',
+        reply_markup=InlineKeyboardMarkup(keyboard)
+    )
+
+async def admin_unblock_spam(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    query = update.callback_query
+    await query.answer()
+    
+    if update.effective_user.id != ADMIN_ID:
+        await query.edit_message_text("❌ دسترسی ندارید!", reply_markup=main_menu_keyboard())
+        return
+    
+    try:
+        user_id = int(query.data.replace("admin_unblock_spam_", ""))
+    except:
+        await query.edit_message_text("❌ خطا!", reply_markup=admin_antispam_keyboard())
+        return
+    
+    save_user(user_id, {'spam_blocked_until': None, 'spam_warnings': 0})
+    
+    try:
+        await context.bot.send_message(
+            user_id,
+            "✅ **بلاک اسپم شما برداشته شد!**\n\n"
+            "لطفاً از ارسال پیام‌های زیاد خودداری کنید.",
+            parse_mode='Markdown',
+            reply_markup=main_menu_keyboard()
+        )
+    except:
+        pass
+    
+    await query.edit_message_text(
+        f"✅ کاربر {user_id} از بلاک اسپم خارج شد!",
+        reply_markup=admin_antispam_keyboard()
+    )
+
+# ============ آمار ============
 async def admin_stats(update: Update, context: ContextTypes.DEFAULT_TYPE):
     query = update.callback_query
     await query.answer()
@@ -2723,18 +3352,261 @@ async def admin_stats(update: Update, context: ContextTypes.DEFAULT_TYPE):
     chats = db.fetchone("SELECT COUNT(*) FROM chats WHERE is_active=1")[0]
     support = db.fetchone("SELECT COUNT(*) FROM support_messages WHERE status='pending'")[0]
     
+    # تفکیک جنسیت
+    male = db.fetchone("SELECT COUNT(*) FROM users WHERE gender='مرد' AND is_setup_complete=1")[0]
+    female = db.fetchone("SELECT COUNT(*) FROM users WHERE gender='زن' AND is_setup_complete=1")[0]
+    other = db.fetchone("SELECT COUNT(*) FROM users WHERE gender='سایر' AND is_setup_complete=1")[0]
+    
+    # تفکیک شهر
+    cities = db.fetchall("SELECT city, COUNT(*) as count FROM users WHERE is_setup_complete=1 GROUP BY city ORDER BY count DESC LIMIT 5")
+    
+    message = f"📊 **آمار ربات**\n\n"
+    message += f"👤 **کاربران:**\n"
+    message += f"   کل کاربران: {total}\n"
+    message += f"   کاربران فعال: {active}\n"
+    message += f"   👨 مرد: {male}\n"
+    message += f"   👩 زن: {female}\n"
+    message += f"   🧑 سایر: {other}\n\n"
+    message += f"🚫 **بلاک‌ها:**\n"
+    message += f"   توسط کاربران: {banned}\n"
+    message += f"   توسط ادمین: {admin_b}\n\n"
+    message += f"💬 **چت‌ها:**\n"
+    message += f"   چت‌های فعال: {chats}\n\n"
+    message += f"⚠️ **گزارش‌ها:**\n"
+    message += f"   در انتظار: {pending}\n\n"
+    message += f"📞 **پشتیبانی:**\n"
+    message += f"   در انتظار: {support}\n\n"
+    
+    if cities:
+        message += f"🏙️ **شهرهای برتر:**\n"
+        for city in cities:
+            message += f"   {city['city']}: {city['count']} نفر\n"
+    
     await query.edit_message_text(
-        f"📊 **آمار ربات**\n\n"
-        f"👤 کل کاربران: {total}\n"
-        f"✅ کاربران فعال: {active}\n"
-        f"🚫 کاربران بلاک شده: {banned}\n"
-        f"👑 بلاک شده توسط ادمین: {admin_b}\n"
-        f"⚠️ گزارش‌های در انتظار: {pending}\n"
-        f"💬 چت‌های فعال: {chats}\n"
-        f"📞 پیام‌های پشتیبانی: {support}",
+        message,
         parse_mode='Markdown',
         reply_markup=admin_panel_keyboard()
     )
+
+# ============ آمار هفتگی ============
+async def admin_weekly_stats(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    query = update.callback_query
+    await query.answer()
+    
+    if update.effective_user.id != ADMIN_ID:
+        await query.edit_message_text("❌ دسترسی ندارید!", reply_markup=main_menu_keyboard())
+        return
+    
+    # آمار ۷ روز اخیر
+    days = []
+    for i in range(7):
+        date = (datetime.now() - timedelta(days=i)).strftime('%Y-%m-%d')
+        days.append(date)
+    
+    message = "📈 **آمار هفتگی**\n\n"
+    
+    # کاربران جدید هر روز
+    message += "📊 **کاربران جدید:**\n"
+    for day in reversed(days):
+        count = db.fetchone("SELECT COUNT(*) FROM users WHERE date(created_at)=?", (day,))[0]
+        day_name = datetime.strptime(day, '%Y-%m-%d').strftime('%A')
+        day_names = {
+            'Monday': 'دوشنبه', 'Tuesday': 'سه‌شنبه', 'Wednesday': 'چهارشنبه',
+            'Thursday': 'پنج‌شنبه', 'Friday': 'جمعه', 'Saturday': 'شنبه', 'Sunday': 'یک‌شنبه'
+        }
+        message += f"   {day_names.get(day_name, day)}: {count} نفر\n"
+    
+    # چت‌های جدید هر روز
+    message += "\n💬 **چت‌های جدید:**\n"
+    for day in reversed(days):
+        count = db.fetchone("SELECT COUNT(*) FROM chats WHERE date(match_date)=?", (day,))[0]
+        day_name = datetime.strptime(day, '%Y-%m-%d').strftime('%A')
+        day_names = {
+            'Monday': 'دوشنبه', 'Tuesday': 'سه‌شنبه', 'Wednesday': 'چهارشنبه',
+            'Thursday': 'پنج‌شنبه', 'Friday': 'جمعه', 'Saturday': 'شنبه', 'Sunday': 'یک‌شنبه'
+        }
+        message += f"   {day_names.get(day_name, day)}: {count} چت\n"
+    
+    # گزارش‌های جدید هر روز
+    message += "\n⚠️ **گزارش‌های جدید:**\n"
+    for day in reversed(days):
+        count = db.fetchone("SELECT COUNT(*) FROM reports WHERE date(created_at)=?", (day,))[0]
+        day_name = datetime.strptime(day, '%Y-%m-%d').strftime('%A')
+        day_names = {
+            'Monday': 'دوشنبه', 'Tuesday': 'سه‌شنبه', 'Wednesday': 'چهارشنبه',
+            'Thursday': 'پنج‌شنبه', 'Friday': 'جمعه', 'Saturday': 'شنبه', 'Sunday': 'یک‌شنبه'
+        }
+        message += f"   {day_names.get(day_name, day)}: {count} گزارش\n"
+    
+    await query.edit_message_text(
+        message,
+        parse_mode='Markdown',
+        reply_markup=admin_panel_keyboard()
+    )
+
+# ============ ارسال همگانی ============
+async def admin_broadcast(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    query = update.callback_query
+    await query.answer()
+    
+    if update.effective_user.id != ADMIN_ID:
+        await query.edit_message_text("❌ دسترسی ندارید!", reply_markup=main_menu_keyboard())
+        return
+    
+    await query.edit_message_text(
+        "📤 **ارسال پیام همگانی**\n\n"
+        "پیام خود را بنویسید و ارسال کنید.\n"
+        "⚠️ پیام برای همه کاربران ارسال خواهد شد.\n\n"
+        "برای لغو، از دکمه برگشت استفاده کنید:",
+        parse_mode='Markdown',
+        reply_markup=InlineKeyboardMarkup([
+            [InlineKeyboardButton("🔙 لغو", callback_data="admin_panel")]
+        ])
+    )
+    context.user_data['admin_broadcast'] = True
+
+async def admin_do_broadcast(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    if update.effective_user.id != ADMIN_ID:
+        return
+    
+    if not context.user_data.get('admin_broadcast'):
+        return
+    
+    message_text = update.message.text
+    if not message_text:
+        await update.message.reply_text("❌ لطفاً پیام بنویس!")
+        return
+    
+    # دریافت همه کاربران
+    users = db.fetchall("SELECT user_id FROM users WHERE is_setup_complete=1")
+    
+    if not users:
+        await update.message.reply_text("❌ هیچ کاربری برای ارسال وجود ندارد!")
+        context.user_data.pop('admin_broadcast', None)
+        return
+    
+    await update.message.reply_text(f"⏳ در حال ارسال پیام به {len(users)} کاربر...")
+    
+    success = 0
+    failed = 0
+    
+    for user in users:
+        try:
+            await context.bot.send_message(
+                user['user_id'],
+                f"📢 **پیام همگانی**\n\n{message_text}",
+                parse_mode='Markdown'
+            )
+            success += 1
+            await asyncio.sleep(0.1)  # جلوگیری از محدودیت
+        except:
+            failed += 1
+    
+    context.user_data.pop('admin_broadcast', None)
+    
+    await update.message.reply_text(
+        f"✅ **ارسال همگانی کامل شد!**\n\n"
+        f"✅ موفق: {success}\n"
+        f"❌ ناموفق: {failed}",
+        reply_markup=admin_panel_keyboard()
+    )
+
+# ============ بلاک و آنبلاک ادمین ============
+async def admin_block_user(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    query = update.callback_query
+    await query.answer()
+    
+    if update.effective_user.id != ADMIN_ID:
+        await query.edit_message_text("❌ دسترسی ندارید!", reply_markup=main_menu_keyboard())
+        return
+    
+    await query.edit_message_text(
+        "🚫 **بلاک کاربر**\n\nآیدی کاربر رو وارد کن:",
+        parse_mode='Markdown',
+        reply_markup=InlineKeyboardMarkup([[InlineKeyboardButton("🔙 برگشت", callback_data="admin_users")]])
+    )
+    context.user_data['admin_action'] = 'block'
+
+async def admin_unblock_user(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    query = update.callback_query
+    await query.answer()
+    
+    if update.effective_user.id != ADMIN_ID:
+        await query.edit_message_text("❌ دسترسی ندارید!", reply_markup=main_menu_keyboard())
+        return
+    
+    blocked = get_admin_blocked_users()
+    
+    if not blocked:
+        await query.edit_message_text("📋 کسی بلاک نشده!", reply_markup=admin_users_keyboard())
+        return
+    
+    message = "📋 لیست بلاک‌شده‌ها:\n\n"
+    keyboard = []
+    
+    for user_id in blocked:
+        user = get_user_dict(user_id)
+        if user:
+            display_name = user.get('display_name', f"کاربر {user_id}")
+            message += f"👤 {display_name} ({user_id})\n"
+            keyboard.append([InlineKeyboardButton(f"✅ آنبلاک {display_name}", callback_data=f"admin_unblock_{user_id}")])
+    
+    keyboard.append([InlineKeyboardButton("🔙 برگشت", callback_data="admin_users")])
+    
+    await query.edit_message_text(message, reply_markup=InlineKeyboardMarkup(keyboard))
+
+async def admin_do_block(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    if update.effective_user.id != ADMIN_ID:
+        return
+    
+    try:
+        user_id = int(update.message.text)
+    except ValueError:
+        await update.message.reply_text("❌ عدد وارد کن!", reply_markup=admin_users_keyboard())
+        context.user_data.pop('admin_action', None)
+        return
+    
+    user = get_user(user_id)
+    if not user:
+        await update.message.reply_text(f"❌ {user_id} پیدا نشد!", reply_markup=admin_users_keyboard())
+        context.user_data.pop('admin_action', None)
+        return
+    
+    db.execute("INSERT OR REPLACE INTO admin_blocks (admin_id, blocked_user_id, reason, created_at) VALUES (?, ?, ?, ?)", 
+              (ADMIN_ID, user_id, "بلاک توسط ادمین", datetime.now()))
+    
+    db.execute("UPDATE chats SET is_active=0 WHERE user1=? OR user2=?", (user_id, user_id))
+    
+    try:
+        await context.bot.send_message(user_id, "🚫 شما توسط مدیریت بلاک شدید!")
+    except:
+        pass
+    
+    await update.message.reply_text(f"✅ {user_id} بلاک شد!", reply_markup=admin_users_keyboard())
+    context.user_data.pop('admin_action', None)
+
+async def admin_do_unblock(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    query = update.callback_query
+    await query.answer()
+    
+    if update.effective_user.id != ADMIN_ID:
+        await query.edit_message_text("❌ دسترسی ندارید!", reply_markup=main_menu_keyboard())
+        return
+    
+    try:
+        user_id = int(query.data.replace("admin_unblock_", ""))
+    except:
+        await query.edit_message_text("❌ خطا!", reply_markup=admin_users_keyboard())
+        return
+    
+    db.execute("DELETE FROM admin_blocks WHERE blocked_user_id=?", (user_id,))
+    
+    try:
+        await context.bot.send_message(user_id, "✅ شما توسط مدیریت آنبلاک شدید!")
+    except:
+        pass
+    
+    await query.edit_message_text(f"✅ {user_id} آنبلاک شد!", reply_markup=admin_users_keyboard())
 
 # ============ پاکسازی خودکار ============
 async def scheduled_cleanup():
@@ -2838,12 +3710,30 @@ def main():
         
         # ============ پنل مدیریت ============
         application.add_handler(CallbackQueryHandler(admin_panel, pattern='^admin_panel$'))
+        application.add_handler(CallbackQueryHandler(admin_users, pattern='^admin_users$'))
+        application.add_handler(CallbackQueryHandler(admin_search_user, pattern='^admin_search_user$'))
+        application.add_handler(CallbackQueryHandler(admin_all_users, pattern='^admin_all_users$'))
+        application.add_handler(CallbackQueryHandler(admin_view_user, pattern='^admin_view_user_'))
         application.add_handler(CallbackQueryHandler(admin_block_user, pattern='^admin_block_user$'))
         application.add_handler(CallbackQueryHandler(admin_unblock_user, pattern='^admin_unblock_user$'))
         application.add_handler(CallbackQueryHandler(admin_do_unblock, pattern='^admin_unblock_'))
-        application.add_handler(CallbackQueryHandler(admin_reports, pattern='^admin_reports$'))
-        application.add_handler(CallbackQueryHandler(admin_stats, pattern='^admin_stats$'))
         application.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, admin_do_block))
+        application.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, admin_do_search_user))
+        
+        # ============ مدیریت چت ============
+        application.add_handler(CallbackQueryHandler(admin_chats, pattern='^admin_chats$'))
+        application.add_handler(CallbackQueryHandler(admin_active_chats, pattern='^admin_active_chats$'))
+        application.add_handler(CallbackQueryHandler(admin_view_chat, pattern='^admin_view_chat_'))
+        application.add_handler(CallbackQueryHandler(admin_close_chat, pattern='^admin_close_chat_'))
+        application.add_handler(CallbackQueryHandler(admin_chat_stats, pattern='^admin_chat_stats$'))
+        
+        # ============ مدیریت گزارش‌ها ============
+        application.add_handler(CallbackQueryHandler(admin_reports_menu, pattern='^admin_reports$'))
+        application.add_handler(CallbackQueryHandler(admin_all_reports, pattern='^admin_all_reports$'))
+        application.add_handler(CallbackQueryHandler(admin_reports_pending, pattern='^admin_reports_pending$'))
+        application.add_handler(CallbackQueryHandler(admin_reports_resolved, pattern='^admin_reports_resolved$'))
+        application.add_handler(CallbackQueryHandler(admin_reports_rejected, pattern='^admin_reports_rejected$'))
+        application.add_handler(CallbackQueryHandler(admin_report_detail, pattern='^admin_report_detail_'))
         
         # ============ پشتیبانی ============
         application.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, support_message_input))
@@ -2851,6 +3741,20 @@ def main():
         application.add_handler(CallbackQueryHandler(admin_reply, pattern='^admin_reply_'))
         application.add_handler(CallbackQueryHandler(admin_close_support, pattern='^admin_close_support_'))
         application.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, admin_send_reply))
+        
+        # ============ آنتی‌اسپم ============
+        application.add_handler(CallbackQueryHandler(admin_antispam, pattern='^admin_antispam$'))
+        application.add_handler(CallbackQueryHandler(admin_toggle_antispam, pattern='^admin_toggle_antispam$'))
+        application.add_handler(CallbackQueryHandler(admin_spam_list, pattern='^admin_spam_list$'))
+        application.add_handler(CallbackQueryHandler(admin_unblock_spam, pattern='^admin_unblock_spam_'))
+        
+        # ============ آمار ============
+        application.add_handler(CallbackQueryHandler(admin_stats, pattern='^admin_stats$'))
+        application.add_handler(CallbackQueryHandler(admin_weekly_stats, pattern='^admin_weekly_stats$'))
+        
+        # ============ ارسال همگانی ============
+        application.add_handler(CallbackQueryHandler(admin_broadcast, pattern='^admin_broadcast$'))
+        application.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, admin_do_broadcast))
         
         # ============ حریم خصوصی ============
         application.add_handler(CallbackQueryHandler(privacy_toggle, pattern='^privacy_toggle_(age|city|change_visibility)$'))
