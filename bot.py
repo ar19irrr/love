@@ -1524,51 +1524,71 @@ async def handle_chat_message(update: Update, context: ContextTypes.DEFAULT_TYPE
     chat_id = update.effective_chat.id
     message_text = update.message.text or ""
     
-    # آنتی‌اسپم
+    # ============ اول: بررسی حالت ارسال همگانی (ادمین) ============
+    if user_id == ADMIN_ID and context.user_data.get('admin_broadcast'):
+        await admin_do_broadcast(update, context)
+        return
+    
+    # ============ دوم: بررسی حالت پاسخ به پشتیبانی (ادمین) ============
+    if user_id == ADMIN_ID and context.user_data.get('admin_reply_to'):
+        await admin_send_reply(update, context)
+        return
+    
+    # ============ سوم: بررسی حالت پشتیبانی (کاربر عادی) ============
+    if context.user_data.get('support_mode'):
+        await support_message_input(update, context)
+        return
+    
+    # ============ چهارم: آنتی‌اسپم ============
     if check_spam(user_id, chat_id):
         await update.message.reply_text(f"🚫 **شما به دلیل ارسال پیام‌های زیاد مسدود شده‌اید!**\n⏳ مدت: {SPAM_BLOCK_DURATION} دقیقه", parse_mode='Markdown')
         return
     log_spam(user_id, chat_id, message_text)
     
-    # بررسی ادمین در حالت پاسخ
-    if user_id == ADMIN_ID and context.user_data.get('admin_reply_to'):
-        await admin_send_reply(update, context)
-        return
-    # بررسی حالت پشتیبانی
-    if context.user_data.get('support_mode'):
-        await support_message_input(update, context)
-        return
-    # بررسی بلاک
+    # ============ پنجم: بررسی بلاک ============
     if is_admin_blocked(user_id):
         await update.message.reply_text("🚫 شما مسدود شده‌اید!", reply_markup=main_menu_keyboard())
         return
+    
+    # ============ ششم: بررسی ثبت‌نام ============
     if user and not user['is_setup_complete']:
         return
+    
+    # ============ هفتم: بررسی حالت ویرایش ============
     if 'editing_field' in context.user_data:
         return
+    
+    # ============ هشتم: بررسی چت فعال ============
     if 'active_chat' not in context.user_data:
         if user and user['is_setup_complete']:
             await update.message.reply_text("❌ در چتی نیستی!", reply_markup=main_menu_keyboard())
         return
     
+    # ============ ادامه کد چت ============
     chat_id = context.user_data['active_chat']
     sender_id = user_id
     chat = get_chat_info(chat_id)
+    
     if not chat or not chat['is_active']:
         await update.message.reply_text("❌ **این چت بسته شده است!**", parse_mode='Markdown', reply_markup=main_menu_keyboard())
         context.user_data.pop('active_chat', None)
         return
+    
     if chat['blocked_by'] and chat['blocked_by'] != sender_id:
         await update.message.reply_text("🚫 بلاک شدید!", reply_markup=main_menu_keyboard())
         context.user_data.pop('active_chat', None)
         return
+    
     partner_id = chat['user2'] if chat['user1'] == sender_id else chat['user1']
+    
     if is_admin_blocked(partner_id):
         await update.message.reply_text("❌ کاربر مقابل مسدود شده!", reply_markup=main_menu_keyboard())
         context.user_data.pop('active_chat', None)
         return
+    
     db.execute("UPDATE chats SET last_message_at=? WHERE id=?", (datetime.now(), chat_id))
     sender_name = get_user_display_name(sender_id)
+    
     try:
         if update.message.photo:
             caption = update.message.caption if update.message.caption else None
