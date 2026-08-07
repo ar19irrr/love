@@ -13,7 +13,7 @@ from flask import Flask, jsonify
 
 # ============ تنظیمات اولیه ============
 TOKEN = os.environ.get('TOKEN', "YOUR_BOT_TOKEN_HERE")
-PORT = int(os.environ.get('PORT', 8080))
+PORT = int(os.environ.get('PORT', 10000))
 ADMIN_ID = int(os.environ.get('ADMIN_ID', 0))
 
 logging.basicConfig(
@@ -31,8 +31,8 @@ def home():
 
 @web_app.route('/ping')
 def ping():
-    return jsonify({"status": "pong", "time": datetime.now().isoformat()})
-
+    return "", 204
+    
 @web_app.route('/health')
 def health():
     return jsonify({"status": "healthy", "bot": "active"})
@@ -2751,12 +2751,15 @@ def main():
     try:
         logger.info("🚀 Starting bot...")
         
+        # ============ اجرای Flask در ترد جداگانه ============
         flask_thread = threading.Thread(target=run_flask, daemon=True)
         flask_thread.start()
+        logger.info(f"🌐 Flask server started on port {PORT}")
         
+        # ============ ساخت اپلیکیشن ============
         application = Application.builder().token(TOKEN).build()
         
-        # ثبت‌نام
+        # ============ هندلر ثبت‌نام ============
         conv_handler = ConversationHandler(
             entry_points=[CommandHandler('start', start)],
             states={
@@ -2784,7 +2787,7 @@ def main():
         )
         application.add_handler(conv_handler)
         
-        # منوها
+        # ============ منوها ============
         application.add_handler(CallbackQueryHandler(search, pattern='^search$'))
         application.add_handler(CallbackQueryHandler(edit_profile, pattern='^edit_profile$'))
         application.add_handler(CallbackQueryHandler(my_requests, pattern='^my_requests$'))
@@ -2795,45 +2798,45 @@ def main():
         application.add_handler(CallbackQueryHandler(back_to_menu, pattern='^back_to_menu$'))
         application.add_handler(CallbackQueryHandler(support, pattern='^support$'))
         
-        # بلاک و آنبلاک
+        # ============ بلاک و آنبلاک ============
         application.add_handler(CallbackQueryHandler(blocked_users_list, pattern='^blocked_users$'))
         application.add_handler(CallbackQueryHandler(unblock_user, pattern='^unblock_'))
         
-        # چت‌ها
+        # ============ چت‌ها ============
         application.add_handler(CallbackQueryHandler(show_chats, pattern='^show_chats$'))
         application.add_handler(CallbackQueryHandler(switch_chat, pattern='^switch_chat_'))
         application.add_handler(CallbackQueryHandler(chat_info, pattern='^chat_info_'))
         application.add_handler(CallbackQueryHandler(back_chat, pattern='^back_chat_'))
         
-        # ویرایش
+        # ============ ویرایش ============
         application.add_handler(CallbackQueryHandler(edit_profile_field, pattern='^edit_(name|gender|age|purpose|city|interests|job|description|photo)$'))
         application.add_handler(CallbackQueryHandler(update_profile_field, pattern='^update_(gender_|purpose_|job_|interest_|interests_done|photo_telegram|photo_none)'))
         application.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, handle_profile_text_input))
         application.add_handler(MessageHandler(filters.PHOTO, handle_profile_text_input))
         
-        # جستجو و درخواست
+        # ============ جستجو و درخواست ============
         application.add_handler(CallbackQueryHandler(candidate_action, pattern='^(like|dislike|more)_'))
         application.add_handler(CallbackQueryHandler(show_candidate, pattern='^next_candidate$'))
         application.add_handler(CallbackQueryHandler(back_to_candidate, pattern='^back_'))
         application.add_handler(CallbackQueryHandler(view_requester, pattern='^view_'))
         application.add_handler(CallbackQueryHandler(handle_request, pattern='^(accept|reject)_'))
         
-        # چت
+        # ============ چت ============
         application.add_handler(CallbackQueryHandler(start_chat, pattern='^chat_'))
         application.add_handler(CallbackQueryHandler(request_photo, pattern='^photo_'))
         application.add_handler(CallbackQueryHandler(block_user, pattern='^bl_'))
         application.add_handler(CallbackQueryHandler(block_reason, pattern='^br_'))
         application.add_handler(CallbackQueryHandler(close_chat, pattern='^close_chat$'))
         
-        # گزارش
+        # ============ گزارش ============
         application.add_handler(CallbackQueryHandler(report_user, pattern='^rp_'))
         application.add_handler(CallbackQueryHandler(report_reason, pattern='^rr_'))
         
-        # مدیریت گزارش
+        # ============ مدیریت گزارش ============
         application.add_handler(CallbackQueryHandler(admin_reject_report, pattern='^admin_reject_report_'))
         application.add_handler(CallbackQueryHandler(admin_block_from_report, pattern='^admin_block_from_report_'))
         
-        # پنل مدیریت
+        # ============ پنل مدیریت ============
         application.add_handler(CallbackQueryHandler(admin_panel, pattern='^admin_panel$'))
         application.add_handler(CallbackQueryHandler(admin_block_user, pattern='^admin_block_user$'))
         application.add_handler(CallbackQueryHandler(admin_unblock_user, pattern='^admin_unblock_user$'))
@@ -2842,25 +2845,26 @@ def main():
         application.add_handler(CallbackQueryHandler(admin_stats, pattern='^admin_stats$'))
         application.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, admin_do_block))
         
-        # پشتیبانی
+        # ============ پشتیبانی ============
         application.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, support_message_input))
         application.add_handler(CallbackQueryHandler(admin_support, pattern='^admin_support$'))
         application.add_handler(CallbackQueryHandler(admin_reply, pattern='^admin_reply_'))
         application.add_handler(CallbackQueryHandler(admin_close_support, pattern='^admin_close_support_'))
         application.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, admin_send_reply))
         
-        # حریم خصوصی
+        # ============ حریم خصوصی ============
         application.add_handler(CallbackQueryHandler(privacy_toggle, pattern='^privacy_toggle_(age|city|change_visibility)$'))
         
-        # پیام‌ها
+        # ============ پیام‌ها ============
         application.add_handler(MessageHandler(filters.ALL & ~filters.COMMAND, handle_chat_message), group=1)
         
-        # پاکسازی
+        # ============ پاکسازی خودکار ============
         loop = asyncio.get_event_loop()
         loop.create_task(scheduled_cleanup())
         
         logger.info("✅ Bot started successfully!")
         
+        # ============ اجرا ============
         asyncio.run(application.run_polling(
             allowed_updates=['message', 'callback_query'],
             drop_pending_updates=True
