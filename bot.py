@@ -1414,26 +1414,36 @@ async def handle_chat_message(update: Update, context: ContextTypes.DEFAULT_TYPE
     user_id = update.effective_user.id
     user = get_user(user_id)
     
-    # بررسی حالت پشتیبانی
+    # ============ بررسی: آیا کاربر ادمین است و در حالت پاسخگویی؟ ============
+    if user_id == ADMIN_ID and context.user_data.get('admin_reply_to'):
+        await admin_send_reply(update, context)
+        return
+    
+    # ============ بررسی: آیا کاربر در حالت پشتیبانی است؟ ============
     if context.user_data.get('support_mode'):
         await support_message_input(update, context)
         return
     
+    # ============ بررسی بلاک ============
     if is_admin_blocked(user_id):
         await update.message.reply_text("🚫 شما مسدود شده‌اید!", reply_markup=main_menu_keyboard())
         return
     
+    # ============ بررسی ثبت‌نام ============
     if user and not user['is_setup_complete']:
         return
     
+    # ============ بررسی حالت ویرایش ============
     if 'editing_field' in context.user_data:
         return
     
+    # ============ بررسی چت فعال ============
     if 'active_chat' not in context.user_data:
         if user and user['is_setup_complete']:
             await update.message.reply_text("❌ در چتی نیستی!", reply_markup=main_menu_keyboard())
         return
     
+    # ============ ادامه کد چت ============
     chat_id = context.user_data['active_chat']
     sender_id = user_id
     
@@ -1441,8 +1451,7 @@ async def handle_chat_message(update: Update, context: ContextTypes.DEFAULT_TYPE
     
     if not chat or not chat['is_active']:
         await update.message.reply_text(
-            "❌ **این چت بسته شده است!**\n\n"
-            "چت توسط یکی از طرفین بسته شده.",
+            "❌ **این چت بسته شده است!**",
             parse_mode='Markdown',
             reply_markup=main_menu_keyboard()
         )
@@ -1523,7 +1532,6 @@ async def handle_chat_message(update: Update, context: ContextTypes.DEFAULT_TYPE
     except Exception as e:
         logger.error(f"Error sending message: {e}")
         await update.message.reply_text("❌ ارسال ناموفق!")
-
 # ============ بلاک توسط کاربر ============
 async def block_user(update: Update, context: ContextTypes.DEFAULT_TYPE):
     query = update.callback_query
@@ -1909,6 +1917,7 @@ async def admin_support(update: Update, context: ContextTypes.DEFAULT_TYPE):
     )
 
 async def admin_reply(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """ادمین آماده پاسخ به کاربر میشه"""
     query = update.callback_query
     await query.answer()
     
@@ -1922,6 +1931,7 @@ async def admin_reply(update: Update, context: ContextTypes.DEFAULT_TYPE):
         await query.edit_message_text("❌ خطا!", reply_markup=admin_panel_keyboard())
         return
     
+    # ذخیره آیدی کاربر برای پاسخ
     context.user_data['admin_reply_to'] = user_id
     
     user = get_user_dict(user_id)
@@ -1930,15 +1940,19 @@ async def admin_reply(update: Update, context: ContextTypes.DEFAULT_TYPE):
     await query.edit_message_text(
         f"📞 **پاسخ به {display_name}**\n\n"
         f"آیدی کاربر: `{user_id}`\n\n"
-        "لطفاً پیام پاسخ رو بنویس و ارسال کن.\n"
-        "⚠️ پیام شما مستقیماً برای کاربر ارسال میشه.",
+        "⚠️ **دستورالعمل:**\n"
+        "• پیام پاسخ خود را در همین چت بنویسید\n"
+        "• پیام شما مستقیماً برای کاربر ارسال میشود\n"
+        "• برای لغو، از دکمه برگشت استفاده کنید\n\n"
+        "✏️ **پیام خود را بنویسید:**",
         parse_mode='Markdown',
         reply_markup=InlineKeyboardMarkup([
-            [InlineKeyboardButton("🔙 برگشت", callback_data="admin_support")]
+            [InlineKeyboardButton("🔙 لغو و برگشت", callback_data="admin_support")]
         ])
     )
 
 async def admin_send_reply(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """ارسال پاسخ ادمین به کاربر - بدون نیاز به چت"""
     if update.effective_user.id != ADMIN_ID:
         return
     
@@ -1957,9 +1971,7 @@ async def admin_send_reply(update: Update, context: ContextTypes.DEFAULT_TYPE):
         return
     
     try:
-        user = get_user_dict(user_id)
-        display_name = user.get('display_name', 'کاربر') if user else 'کاربر'
-        
+        # ارسال مستقیم به کاربر
         await context.bot.send_message(
             user_id,
             f"📞 **پاسخ از پشتیبانی**\n\n{reply_text}\n\n"
@@ -1968,10 +1980,13 @@ async def admin_send_reply(update: Update, context: ContextTypes.DEFAULT_TYPE):
             reply_markup=main_menu_keyboard()
         )
         
+        # بستن پیام‌های پشتیبانی این کاربر
         db.execute("UPDATE support_messages SET status='replied' WHERE user_id=? AND status='pending'", (user_id,))
         
         await update.message.reply_text(
-            f"✅ **پاسخ شما به {display_name} ارسال شد!**",
+            f"✅ **پاسخ شما به کاربر ارسال شد!**\n\n"
+            f"آیدی کاربر: `{user_id}`",
+            parse_mode='Markdown',
             reply_markup=admin_panel_keyboard()
         )
         context.user_data.pop('admin_reply_to', None)
@@ -1986,7 +2001,6 @@ async def admin_send_reply(update: Update, context: ContextTypes.DEFAULT_TYPE):
             reply_markup=admin_panel_keyboard()
         )
         context.user_data.pop('admin_reply_to', None)
-
 async def admin_close_support(update: Update, context: ContextTypes.DEFAULT_TYPE):
     query = update.callback_query
     await query.answer()
