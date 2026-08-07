@@ -1534,31 +1534,41 @@ async def handle_chat_message(update: Update, context: ContextTypes.DEFAULT_TYPE
         await admin_send_reply(update, context)
         return
     
-    # ============ سوم: بررسی حالت پشتیبانی (کاربر عادی) ============
+    # ============ سوم: بررسی حالت جستجوی کاربر (ادمین) ============
+    if user_id == ADMIN_ID and context.user_data.get('admin_action') == 'search_user':
+        await admin_do_search_user(update, context)
+        return
+    
+    # ============ چهارم: بررسی حالت بلاک کردن (ادمین) ============
+    if user_id == ADMIN_ID and context.user_data.get('admin_action') == 'block':
+        await admin_do_block(update, context)
+        return
+    
+    # ============ پنجم: بررسی حالت پشتیبانی (کاربر عادی) ============
     if context.user_data.get('support_mode'):
         await support_message_input(update, context)
         return
     
-    # ============ چهارم: آنتی‌اسپم ============
+    # ============ ششم: آنتی‌اسپم ============
     if check_spam(user_id, chat_id):
         await update.message.reply_text(f"🚫 **شما به دلیل ارسال پیام‌های زیاد مسدود شده‌اید!**\n⏳ مدت: {SPAM_BLOCK_DURATION} دقیقه", parse_mode='Markdown')
         return
     log_spam(user_id, chat_id, message_text)
     
-    # ============ پنجم: بررسی بلاک ============
+    # ============ هفتم: بررسی بلاک ============
     if is_admin_blocked(user_id):
         await update.message.reply_text("🚫 شما مسدود شده‌اید!", reply_markup=main_menu_keyboard())
         return
     
-    # ============ ششم: بررسی ثبت‌نام ============
+    # ============ هشتم: بررسی ثبت‌نام ============
     if user and not user['is_setup_complete']:
         return
     
-    # ============ هفتم: بررسی حالت ویرایش ============
+    # ============ نهم: بررسی حالت ویرایش ============
     if 'editing_field' in context.user_data:
         return
     
-    # ============ هشتم: بررسی چت فعال ============
+    # ============ دهم: بررسی چت فعال ============
     if 'active_chat' not in context.user_data:
         if user and user['is_setup_complete']:
             await update.message.reply_text("❌ در چتی نیستی!", reply_markup=main_menu_keyboard())
