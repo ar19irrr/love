@@ -373,7 +373,7 @@ async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
     if user and user['is_setup_complete']:
         is_admin = (user_id == ADMIN_ID)
         await update.message.reply_text(
-            f"🌟 به بات هم‌نوا خوش اومدی {update.effective_user.first_name}!",
+            f"🌟 به بات عشق جاودانه خوش اومدی {update.effective_user.first_name}!",
             reply_markup=main_menu_keyboard(is_admin)
         )
         return ConversationHandler.END
@@ -382,7 +382,7 @@ async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
     context.user_data['display_name'] = display_name
     
     await update.message.reply_text(
-        "🌟 **به بات هم‌نوا خوش اومدی!** 🌟\n\n"
+        "🌟 **به بات عشق جاودانه خوش اومدی!** 🌟\n\n"
         "این بات به تو کمک میکنه تا افراد هم‌فکر رو پیدا کنی.\n"
         "لطفاً اطلاعات زیر رو وارد کن:\n\n"
         "**مرحله ۱ از ۱۱: جنسیت**",
@@ -1109,7 +1109,7 @@ async def handle_request(update: Update, context: ContextTypes.DEFAULT_TYPE):
             chat_id = db.execute("SELECT last_insert_rowid()").fetchone()[0]
             
             chat_rules = (
-                "📋 **قوانین چت در بات هم‌نوا**\n\n"
+                "📋 **قوانین چت در بات عشق جاودانه**\n\n"
                 "🔒 **حریم خصوصی:**\n"
                 "• تا زمانی که به فرد مقابل اطمینان کامل پیدا نکردید، از به اشتراک گذاشتن شماره تماس، آیدی تلگرام و سایر اطلاعات شخصی خودداری کنید.\n"
                 "• لطفاً در چت از ذکر نام کامل، آدرس محل سکونت و اطلاعات کاری خود بپرهیزید.\n\n"
